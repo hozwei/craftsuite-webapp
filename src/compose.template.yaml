@@ -1,0 +1,154 @@
+# craftsuite-webapp: the Craft web apps by storytold (PdfCraft, PhotoCraft, VectorCraft,
+# DesignCraft) behind an OpenID Connect sign-in, kept up to date from their GitHub releases,
+# and optionally opening files from Nextcloud through nextcloud-craftsuite-layer.
+#
+# Settings come from .env next to this file (copy .env.example). Documentation: README.md and
+# docs/. For a UI that takes one YAML without an .env file (TrueNAS SCALE custom apps), render
+# it first: docs/truenas.md.
+#
+#   browser -> your TLS reverse proxy -> web (nginx, published on CRAFT_PORT)
+#                web asks gate (oauth2-proxy) about every request (auth_request);
+#                gate signs users in with your OpenID Connect provider (e.g. Nextcloud)
+#   update   -> downloads, verifies and switches the app releases in CRAFT_DATA_DIR
+#
+# The scripts below are generated from src/ by tools/build-compose.sh; edit them there.
+#
+# In the scripts below, "$$" stands for "$" (Compose escaping).
+name: craftsuite-webapp
+
+services:
+  gate:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5-alpine
+    container_name: craft-gate
+    restart: unless-stopped
+    user: "65534:65534"
+    environment:
+      OAUTH2_PROXY_PROVIDER: "oidc"
+      OAUTH2_PROXY_OIDC_ISSUER_URL: "${CRAFT_OIDC_ISSUER_URL:?set CRAFT_OIDC_ISSUER_URL}"
+      OAUTH2_PROXY_CLIENT_ID: "${CRAFT_OIDC_CLIENT_ID:?set CRAFT_OIDC_CLIENT_ID}"
+      OAUTH2_PROXY_CLIENT_SECRET: "${CRAFT_OIDC_CLIENT_SECRET:?set CRAFT_OIDC_CLIENT_SECRET}"
+      OAUTH2_PROXY_COOKIE_SECRET: "${CRAFT_COOKIE_SECRET:?set CRAFT_COOKIE_SECRET}"
+      OAUTH2_PROXY_REDIRECT_URL: "https://${CRAFT_HOST:?set CRAFT_HOST}/oauth2/callback"
+      OAUTH2_PROXY_UPSTREAMS: "static://202"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:4180"
+      OAUTH2_PROXY_SCOPE: "openid"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "*"
+      OAUTH2_PROXY_OIDC_EMAIL_CLAIM: "sub"
+      OAUTH2_PROXY_SKIP_CLAIMS_FROM_PROFILE_URL: "true"
+      OAUTH2_PROXY_CODE_CHALLENGE_METHOD: "S256"
+      OAUTH2_PROXY_SKIP_PROVIDER_BUTTON: "true"
+      OAUTH2_PROXY_COOKIE_NAME: "__Host-craft"
+      OAUTH2_PROXY_COOKIE_SECURE: "true"
+      OAUTH2_PROXY_COOKIE_SAMESITE: "lax"
+      OAUTH2_PROXY_COOKIE_EXPIRE: "${CRAFT_SESSION_LIFETIME:-12h}"
+      OAUTH2_PROXY_COOKIE_CSRF_PER_REQUEST: "true"
+      OAUTH2_PROXY_SESSION_COOKIE_MINIMAL: "true"
+      OAUTH2_PROXY_SILENCE_PING_LOGGING: "true"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:4180/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    image: nginxinc/nginx-unprivileged:1.30-alpine-slim
+    container_name: craft-web
+    restart: unless-stopped
+    dns_opt:
+      - "ndots:1"
+    depends_on:
+      - gate
+    environment:
+      CRAFTSUITE_ALLOWED_ORIGINS: "${CRAFTSUITE_ALLOWED_ORIGINS:-}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+@@WEB@@
+    ports:
+      - "${CRAFT_PORT:-8080}:8080"
+    volumes:
+      - "${CRAFT_DATA_DIR:-./data}:/srv/data:ro"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  update:
+    image: craftsuite-webapp-update:1
+    build:
+      dockerfile_inline: |
+        FROM alpine:3.24
+        RUN apk add --no-cache coreutils curl gzip jq tzdata unzip
+    container_name: craft-update
+    restart: unless-stopped
+    init: true
+    user: "${CRAFT_USER:-1000:1000}"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+@@UPDATE@@
+    environment:
+      TZ: "${TZ:-UTC}"
+      HOME: "/tmp"
+      PATH: "/tmp/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+      CRAFT_UPDATE_TIME: "${CRAFT_UPDATE_TIME:-07:00}"
+      CRAFT_MIN_AGE_HOURS: "${CRAFT_MIN_AGE_HOURS:-24}"
+      CRAFT_APPS: "${CRAFT_APPS:-pdfcraft photocraft vectorcraft designcraft}"
+      CRAFT_LANGUAGE: "${CRAFT_LANGUAGE:-en}"
+      CRAFT_LINK_URL: "${CRAFT_LINK_URL:-}"
+      CRAFT_LINK_LABEL: "${CRAFT_LINK_LABEL:-Nextcloud}"
+      CRAFTSUITE_ALLOWED_ORIGINS: "${CRAFTSUITE_ALLOWED_ORIGINS:-}"
+      CRAFTSUITE_LAYER_VERSION: "${CRAFTSUITE_LAYER_VERSION:-}"
+      CRAFTSUITE_LAYER_SHA256: "${CRAFTSUITE_LAYER_SHA256:-}"
+      CRAFTSUITE_LAYER_REPO: "${CRAFTSUITE_LAYER_REPO:-hozwei/nextcloud-craftsuite-layer}"
+      CRAFTSUITE_CANARY: "${CRAFTSUITE_CANARY:-on}"
+    volumes:
+      - "${CRAFT_DATA_DIR:-./data}:/craft"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777,exec
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    cpus: 1
+    mem_limit: 512m
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q '^OK' /craft/state/status && find /craft/state/status -mmin -1560 | grep -q ."]
+      interval: 10m
+      timeout: 10s
+      retries: 1
+      start_period: 15m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
