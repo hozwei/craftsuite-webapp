@@ -23,7 +23,7 @@ cadcraft: 0.5.0 (previous -, blocked -, Nextcloud yes)
 lightcraft: 0.6.0 (previous 0.5.0, blocked -, Nextcloud yes)
 filmcraft: 0.6.0 (previous -, blocked -, Nextcloud yes)
 effectcraft: 0.8.0 (previous 0.7.0, blocked -, Nextcloud yes)
-layer: 0.2.0
+layer: 0.4.0
 OK 2026-10-12 07:00:41
 ```
 
@@ -86,10 +86,14 @@ Add the app to `CRAFT_APPS` in `.env` (empty or missing: all eleven) and run
 qualifies: old enough by `CRAFT_MIN_AGE_HOURS` and, with the canary check, tested. If the newest
 release is younger than `CRAFT_MIN_AGE_HOURS`, the app starts with an older one, possibly older
 than the release the layer's adapters were checked against; the newest follows on a later run (or
-[update now](#update-now)). While a canary issue is open or a canary failure holds new releases
-([the canary hold](#the-canary-hold)), a new app is not installed, and each run reports it as an
-error. With the Nextcloud integration on, also set the app's address in Nextcloud
-([nextcloud.md](nextcloud.md#on-nextclouds-side), step 3).
+[update now](#update-now)). With the canary check, though, an older release qualifies only if it
+was still the newest of its app when its first canary run ended. If none qualifies, the app is
+missing, without an error, until its newest release has passed its first run and is old enough
+(`<app>: not installed yet, no release qualifies yet; a later run takes one`). While a canary
+issue is open or a canary failure holds new releases ([the canary hold](#the-canary-hold)), a new
+app is not installed; each run reports that as an error when a release would otherwise qualify
+(`<app>: ERROR - <version> not installed: …`). With the Nextcloud integration on, also
+set the app's address in Nextcloud ([nextcloud.md](nextcloud.md#on-nextclouds-side), step 3).
 
 ## The canary hold
 
@@ -98,7 +102,10 @@ When the layer's canary has failed since your layer version came into use, `--st
 new app release is taken (see [how-it-works.md](how-it-works.md#the-canary)). Read the issue:
 
 - **It concerns the apps** (a new app release breaks the translator): wait for a layer release with
-  the fix, then [upgrade the layer](#upgrading-nextcloud-craftsuite-layer). That ends the hold.
+  the fix, then [upgrade the layer](#upgrading-nextcloud-craftsuite-layer). That ends the hold. The
+  app release that failed stays out; the app's next release comes once it passes its own first run
+  (to take the failed one anyway, [update now](#update-now) with `-e CRAFTSUITE_CANARY=off`; that
+  run takes the newest release of every app in `CRAFT_APPS`, untested).
 - **It does not** (the issue says the test environment failed, or your layer version already has
   the fix): confirm, which also starts a run right away:
 
@@ -107,10 +114,11 @@ new app release is taken (see [how-it-works.md](how-it-works.md#the-canary)). Re
   ```
 
 After either, failures count from that moment. While the issue is still open, new releases wait
-(without an error); if it is still open after the next canary run (04:23 UTC plus three hours),
-that run failed too and the hold comes back, so confirm again once it has passed (or run once with
-`-e CRAFTSUITE_CANARY=off`). The releases whose first canary run failed stay skipped; later ones
-are taken as usual.
+(without an error); if it is still open at the check time of the next canary run (within a minute
+after its end), that run failed too and the hold comes back, so confirm again once a run has
+passed (or run once with `-e CRAFTSUITE_CANARY=off`). Releases whose first canary run did not pass
+stay out after either, since later runs test the layer's main branch and not your layer version;
+later releases are taken as usual.
 
 ## Upgrading nextcloud-craftsuite-layer
 
@@ -134,8 +142,15 @@ release's changelog first.
    docker exec craft-update craft-update --status
    ```
 
-3. Back up Nextcloud, then replace its app: download and check `craftsuite_layer-<version>.tar.gz`
-   as in [nextcloud.md](nextcloud.md#on-nextclouds-side), delete the folder
+3. Back up Nextcloud. `occ upgrade` below also updates every App Store app that has an update
+   pending, so first see which those are:
+
+   ```sh
+   occ app:update --showonly
+   ```
+
+   Then replace the app: download and check `craftsuite_layer-<version>.tar.gz` as in
+   [nextcloud.md](nextcloud.md#on-nextclouds-side), delete the folder
    `custom_apps/craftsuite_layer`, unpack the new one, set its owner, then:
 
    ```sh
@@ -143,10 +158,16 @@ release's changelog first.
    occ app:list | grep craftsuite_layer
    ```
 
-   The addresses of the apps stay, and so does a group restriction set with `app:enable -g`
-   (`occ config:app:get craftsuite_layer enabled`); a plain `occ app:enable craftsuite_layer`
-   would lift it. If the new release supports more apps, set their addresses
-   ([nextcloud.md](nextcloud.md#on-nextclouds-side), step 3). Do steps 2 and 3 close together.
+   From 0.3.0 on, the output of `occ upgrade` has the app's repair step with the line
+   `… file types registered, … existing files retyped.`; if the web server's user cannot write
+   Nextcloud's `config/` folder, the line says so instead
+   (`Nextcloud's config folder cannot be written (see the log): …`), and the files whose
+   extensions Nextcloud does not know keep Nextcloud's icons
+   ([nextcloud.md](nextcloud.md#on-nextclouds-side)). The addresses of the apps stay, and so does
+   a group restriction set with `app:enable -g` (`occ config:app:get craftsuite_layer enabled`); a
+   plain `occ app:enable craftsuite_layer` would lift it. If the new release supports more apps,
+   set their addresses ([nextcloud.md](nextcloud.md#on-nextclouds-side), step 3). Do steps 2 and
+   3 close together.
 
 To go back, set the previous version and checksum again. For the Nextcloud app, the way back is
 the backup from step 3: the layer's documentation does not cover installing an older app over a
@@ -168,14 +189,15 @@ first: the Nextcloud updater disables apps that do not declare it.
    may frame the apps any more), then `docker compose up -d`.
 
 New app releases then come without the translator. The versions being served keep it until their
-next release; it does nothing, since no site may frame them. To remove it at once, with the layer
-version that was in use (`docker exec craft-update ls /craft/layer`):
+next release; it does nothing, since no site may frame them. To remove it at once, with the
+injector of the layer version that was in use, whose bundle stays in the data folder
+(`docker exec craft-update ls /craft/layer` shows it):
 
 ```sh
-docker exec craft-update sh -c 'for a in $CRAFT_APPS; do sh /craft/layer/craftsuite-layer-hosting-0.2.0/hosting/inject-translator.sh -q --remove --app "$a" "/craft/www/$a"; done'
+docker exec craft-update sh -c 'for a in $CRAFT_APPS; do sh /craft/layer/craftsuite-layer-hosting-*/hosting/inject-translator.sh -q --remove --app "$a" "/craft/www/$a"; done'
 ```
 
-With 0.2.0 this also puts EffectCraft's own service worker back.
+From layer 0.2.0 on, this also puts EffectCraft's own service worker back.
 
 ## Changing the Nextcloud address
 
@@ -199,7 +221,7 @@ A new release of this repository brings, for example, a newer oauth2-proxy. Read
 
 ```sh
 git fetch --tags
-git checkout v0.2.0
+git checkout v0.3.0
 diff .env.example .env
 docker compose up -d --build
 ```
@@ -235,7 +257,10 @@ docker compose up -d
 ```
 
 The first run then takes the newest qualifying release of each app, which need not be the version
-you had.
+you had. With the canary check, an older release qualifies only if it was still the newest of its
+app when its first canary run ended, so an app can be missing, with the status `OK`, until its
+newest release has passed its first run and is `CRAFT_MIN_AGE_HOURS` old. While no app is
+installed, the start page says so: "No app is installed yet; the log of craft-update says why."
 
 ## Signing out and emergencies
 

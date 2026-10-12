@@ -67,7 +67,7 @@ anywhere.
 
 Requirements: Nextcloud 34 or 35, the apps on a host name of their own under the same
 registrable domain as Nextcloud (`craft.example.com` next to `cloud.example.com`), and the same
-release of nextcloud-craftsuite-layer on both sides. This page uses 0.2.0.
+release of nextcloud-craftsuite-layer on both sides. This page uses 0.4.0.
 
 ### On the apps' side
 
@@ -75,8 +75,8 @@ In `.env`:
 
 ```sh
 CRAFTSUITE_ALLOWED_ORIGINS=https://cloud.example.com
-CRAFTSUITE_LAYER_VERSION=0.2.0
-CRAFTSUITE_LAYER_SHA256=3325b93797dfcfda4fbeda9ce127f1f03f0a3d3d62df621b22019e175e3e4b9b
+CRAFTSUITE_LAYER_VERSION=0.4.0
+CRAFTSUITE_LAYER_SHA256=2d0e8e3c795193d800b8316b28db545e5be24e0ab45e8423114adfd38bc2be1d
 ```
 
 `CRAFTSUITE_ALLOWED_ORIGINS` is your Nextcloud's address exactly as the browser shows it, without
@@ -104,8 +104,8 @@ versions being served.
 
    ```sh
    cd "$(mktemp -d)"
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.2.0/craftsuite_layer-0.2.0.tar.gz
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.2.0/SHA256SUMS
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.0/craftsuite_layer-0.4.0.tar.gz
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.0/SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS
    ```
 
@@ -114,7 +114,7 @@ versions being served.
    official image), and enable it:
 
    ```sh
-   tar -xzf craftsuite_layer-0.2.0.tar.gz -C /path/to/nextcloud/custom_apps
+   tar -xzf craftsuite_layer-0.4.0.tar.gz -C /path/to/nextcloud/custom_apps
    chown -R 33:33 /path/to/nextcloud/custom_apps/craftsuite_layer
    occ app:enable craftsuite_layer
    ```
@@ -149,11 +149,39 @@ DesignCraft with a click, `.deckcraft` in DeckCraft, camera raw files (`.dng`, `
 in LightCraft, `.fcproj` in FilmCraft, `.ecproj` in EffectCraft, and `.dxf` in CADCraft (in
 VectorCraft if CADCraft has no address). Office files (`.docx`, `.xlsx`, `.pptx`, …) have
 WordCraft, GridCraft and DeckCraft in their menu only, so a click on them stays with Nextcloud
-Office or ONLYOFFICE where one is installed; JPEG, PNG, TIFF and WebP pictures have LightCraft in
-their menu only. FilmCraft and EffectCraft open and save their project files only: the media a
-project uses are not in the file and are missing when it is opened from Nextcloud. The layer's
-[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.2.0/docs/nextcloud-app.md)
+Office, ONLYOFFICE or Euro-Office where one is installed; JPEG, PNG, TIFF and WebP pictures have
+PhotoCraft and LightCraft in their menu only. A Craft app made the default app (below) takes the
+click on all its types. FilmCraft and EffectCraft open and save their project files only: the
+media a project uses are not in the file and are missing when it is opened from Nextcloud. The
+layer's [Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.0/docs/nextcloud-app.md)
 lists every file type, the editor page's messages and what happens on save.
+
+What the Nextcloud app 0.3.0 and 0.4.0 added, in short; the settings and their limits are in the
+layer's documentation, under
+[Configuring](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.0/docs/nextcloud-app.md#configuring)
+and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.0/docs/nextcloud-app.md#files):
+
+- **Entries only for the enabled groups.** Enabled with `-g` (step 2), the app shows its entries
+  in Files only to the members of those groups; before 0.3.0, everybody saw them.
+- **The language each app starts in**, next to its address on the settings page, or
+  `occ config:app:set craftsuite_layer <app>_language --value=…`: `user` (the user's Nextcloud
+  language) or one of the app's languages, such as `de`; empty, the app decides. It needs
+  translator 0.3.0 or later, so `CRAFTSUITE_LAYER_VERSION` 0.3.0 or later here. DesignCraft,
+  WordCraft and DeckCraft always start in English.
+- **File type icons**: Files shows the apps' icons on the files they open where Nextcloud has only
+  a general icon (`.psd`, `.dxf`, camera raws, …). For the extensions Nextcloud does not know, the
+  app writes MIME types into `config/mimetypemapping.json` and `config/mimetypealiases.json` when
+  it is enabled or updated, so Nextcloud's `config/` folder must be writable for the web server's
+  user; if it is not, enabling and updating still work: the app logs a warning, says so in the
+  output of `occ`, and the files whose extensions Nextcloud does not know keep Nextcloud's icons.
+  The MIME types apply to every account, also outside the enabled groups: `.dxf`, `.svgz`, `.wmf`,
+  `.psb` and the camera raws `.cr3`, `.nrw`, `.rwl`, `.srw` then count as images, and `.eps` files
+  lose the previews of Nextcloud's Postscript preview provider where it is enabled.
+- **A default app**: PdfCraft, PhotoCraft, VectorCraft, WordCraft, GridCraft, DeckCraft and
+  LightCraft can take the click on all their file types ("On a click" on the settings page, or
+  `<app>_default_app`); the app that had the click before stays in the file's menu.
+- **"+ New" entries** in Files for the apps' own formats; WordCraft, GridCraft and PdfCraft get one
+  only as the default app.
 
 ### Nextcloud's own headers
 

@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.3.0] - 2026-10-12
+
+Canary runs instead of a fixed schedule, and nextcloud-craftsuite-layer 0.4.0.
+
+- The updater reads the runs of the layer's canary (`canary.yml` on `main`) instead of assuming a
+  run at 04:23 UTC every day: GitHub starts scheduled runs late, skips some and turns schedules
+  off after 60 days without activity. Runs that ended with `success` or `failure` count; a
+  cancelled run tested nothing. A run starts at its creation (`created_at`): `run_started_at`
+  resets on a re-run, and a re-run of failed jobs keeps the canary job's earlier result. A run
+  passed if no `canary` issue was open at its check time, a minute after its end (but not after
+  the next counted run's start, and never before its own end); a re-run only if none was open at
+  any time during it. A release is taken only once the first counted run that started after it
+  (after its last upload) has passed and no newer release of the app came out before that run
+  ended. A run that failed without a `canary` issue (usually only the layer's look at the next
+  Nextcloud release failed) counts as passed. Only the last 100 finished runs are looked at.
+- A release whose first run did not pass is never taken, as in 0.2.0: later runs test the layer's
+  main branch, not the pinned layer. The app's next release that passes its own first run is.
+- A canary failure since the layer version came into use is an issue opened since then, or one
+  open at the check time of the first counted run that started since then (for a re-run, at any
+  time during it). Once found, it holds until another layer version is in use or you confirm, also
+  when its run is re-run or drops out of the last 100 runs: `state/canary-failed` now has a second
+  line with the layer version and time the failure belongs to.
+- Without a canary run, new releases now wait; 0.2.0 took them as if they had passed. Every run
+  logs the newest canary run (`layer: newest canary run started <time> (success)` or `(failure)`,
+  followed by `, re-run`, then `, canary issue open` or `, no canary issue` where they apply,
+  for example `(failure, no canary issue)`); when that run started more
+  than three days ago, or there is none, it reports an error instead (status, start page, health
+  check), which holds nothing: releases that an earlier run tested are still taken.
+- A run makes up to thirteen GitHub API requests instead of twelve: one per app, the canary's runs
+  and its issues. When the runs cannot be read, the run logs
+  `layer: ERROR - cannot read the canary runs of …` and new releases wait
+  (`<app>: <version> held back (canary runs not readable)`), as when the issues cannot be read.
+- The start page says "No app is installed yet; the log of craft-update says why." whenever no app
+  is installed, also after a run without errors: on a new data folder, that lasts until a release
+  of an app has passed its first canary run and is `CRAFT_MIN_AGE_HOURS` old.
+- Known limits ([docs/how-it-works.md](docs/how-it-works.md#the-canary)): a failed run without a
+  `canary` issue also counts as passed when, rarely, its canary job was cancelled while the
+  look-ahead failed, or its report job failed after a canary failure; a minimum age of two to three
+  days leaves the next run time to report it (the default of 24 hours does not reliably). No GitHub
+  token is sent. The error about a stopped canary ends only with a new counted run (a re-run of an
+  older run does not count), or with the canary check off.
+- Works with nextcloud-craftsuite-layer 0.4.0 (`.env.example` names it). Its hosting bundle has
+  the same injector as 0.2.0 and translators 0.4.0, which can start eight of the apps in the
+  language the Nextcloud app asks for; its Nextcloud app shows the entries only to the groups it
+  is enabled for, and adds file type icons, a default app and "+ New" entries
+  ([docs/nextcloud.md](docs/nextcloud.md#on-nextclouds-side)).
+
+Upgrading from 0.2.0 ([docs/operations.md](docs/operations.md#updating-craftsuite-webapp)):
+
+- Nothing to change in `.env` for the canary.
+- Releases are taken only once the first canary run after them has tested and passed them; the
+  installed versions stay.
+- `CRAFT_MIN_AGE_HOURS` keeps its meaning. A release now also waits for its first canary run,
+  whatever its age. The minimum age gives the projects time to withdraw a bad release and, at two
+  to three days, the next canary run time to report a failure that the first one missed (see the
+  known limits above); the default of 24 hours does not reliably cover the next run.
+- Moving to layer 0.4.0 is optional: set `CRAFTSUITE_LAYER_VERSION=0.4.0` and its
+  `CRAFTSUITE_LAYER_SHA256`, and upgrade the Nextcloud app to 0.4.0
+  ([docs/operations.md](docs/operations.md#upgrading-nextcloud-craftsuite-layer)); `occ upgrade`
+  also updates the App Store apps that have an update pending.
+- A `state/canary-failed` left by 0.2.0 holds only if 0.3.0 finds the failure again. Going back to
+  0.2.0 keeps the data folder as it is: 0.2.0 reads only the first line of that file.
+
 ## [0.2.0] - 2026-10-12
 
 Seven more apps, and nextcloud-craftsuite-layer 0.2.0.

@@ -22,14 +22,17 @@ WWW=$BASE/www
 REL=$WWW/releases
 STATE=$BASE/state
 LAYERS=$BASE/layer
-# The layer's canary runs daily at 04:23 UTC (cron '23 4 * * *' in its canary.yml) and tests
-# the newest release of each app. Seconds after midnight UTC:
-CANARY_START=15780
+# The layer's canary is its workflow canary.yml (daily, or started by hand), which tests the
+# newest release of each app. When its newest run that tested something started longer ago than
+# this (seconds), the canary has stopped, and new releases would wait for it without a word.
+CANARY_STALE=259200
 INJ=
 HOLD=
+RUNS='[]'
 ISSUES='[]'
 OPEN=
 FAILED=
+STALE=
 
 log() { echo "$(date '+%F %T') $*"; }
 
@@ -232,15 +235,36 @@ add_translator() {
   return 0
 }
 
-# Reads the layer's canary issues (open and closed) into ISSUES for the release choice and sets
-# OPEN (an open canary issue) and FAILED (the newest canary failure since the current layer
-# version came into use). state/canary-since keeps one line "<layer version> <time>" per version
-# that came into use; removing the file confirms that earlier failures do not concern the layer.
-# A failure is a canary issue opened after that time, or one still open after the first canary
-# run that followed it (a failing run comments on the open issue instead of opening a new one).
-# The canary tests the layer's main branch, so after a failure a later passing run does not show
-# that the pinned layer handles the new releases: they wait until another layer version is in use
-# or the failure is confirmed. Returns 1 if the issues could not be read.
+# jq definitions for the canary runs in RUNS and the issues in $issues. A run passed if no canary
+# issue was open at its check time (at): the run opens or closes its issue in its last job, just
+# before it ends. A re-run passed only if no canary issue was open at any time from its creation
+# to then: its first attempt may have failed, and a re-run of failed jobs keeps the canary job's
+# earlier result.
+# shellcheck disable=SC2016 # jq variables, not the shell's
+CANARY_JQ='def open_during($from; $to): any($issues[]; (.created_at | fromdateiso8601) <= $to
+    and (.closed_at == null or (.closed_at | fromdateiso8601) > $from));
+  def passed($r): open_during(if $r.rerun then $r.start else $r.at end; $r.at) | not;'
+
+# Reads the layer's canary: its runs into RUNS and its issues into ISSUES, for the release choice,
+# and sets OPEN (an open canary issue), FAILED (the newest canary failure since the current layer
+# version came into use) and STALE (when the newest run is older than CANARY_STALE). A run of
+# canary.yml on main fetches the newest release of each app and tests the translators of the
+# layer's main branch against it; a failing run opens an issue labelled canary (or comments on the
+# open one), the next passing run closes it. Only runs that ended with success or failure count: a
+# cancelled one (a timeout, for example) tested nothing. RUNS holds them oldest first, in seconds:
+# start (the run's creation: every attempt and every job of a re-run started after it), end, the
+# check time at (a minute after the end, but not after the next run's start), and whether it is a
+# re-run. Whether a run passed is told by the issues, since a run also fails when only the
+# layer's look at the next Nextcloud release does.
+# state/canary-since keeps one line "<layer version> <time>" per version that came into use;
+# removing the file confirms that earlier failures do not concern the layer. A failure is a
+# canary issue opened after that time, or one the first run after it did not pass (a failing run
+# comments on the open issue instead of opening a new one). The canary tests the layer's main
+# branch, so after a failure a later passing run does not show that the pinned layer handles the
+# new releases: they wait until another layer version is in use or the failure is confirmed, and
+# a failure once found counts until then (state/canary-failed: the issue, then the version and
+# time it belongs to). Returns 1 if the runs or the issues could not be read (CANARY_PART says
+# which).
 canary_check() {
   since=$(awk -v v="$LAYER_VERSION" '$1 == v && $2 ~ /^[0-9]+$/ { s = $2 } END { print s }' "$STATE/canary-since" 2>/dev/null)
   if [ -z "$since" ]; then
@@ -249,18 +273,53 @@ canary_check() {
     rm -f "$STATE/canary-failed"
     log "layer: canary failures count from now on (layer $LAYER_VERSION)"
   fi
+  CANARY_PART=runs
+  json=$(curl -fsS --retry 3 --connect-timeout 20 --max-time 60 -A craft-update \
+    -H 'Accept: application/vnd.github+json' \
+    "$API/$LAYER_REPO/actions/workflows/canary.yml/runs?branch=main&status=completed&exclude_pull_requests=true&per_page=100") || return 1
+  RUNS=$(printf '%s' "$json" | jq -c 'if (.workflow_runs | type) == "array" then
+      [ .workflow_runs[] | select(.head_branch == "main" and .status == "completed"
+          and (.conclusion == "success" or .conclusion == "failure")
+          and (.created_at | type) == "string" and (.updated_at | type) == "string")
+        | {start: (.created_at | fromdateiso8601), end: (.updated_at | fromdateiso8601), conclusion,
+           rerun: ((.run_attempt // 1) > 1)} ]
+      | sort_by(.start)
+      | . as $r | [ range(length) as $i | $r[$i]
+          + {at: ([ $r[$i].end, ([ $r[$i].end + 60, ($r[$i + 1].start // ($r[$i].end + 60)) ] | min) ] | max)} ]
+    else error("not a list") end') && [ -n "$RUNS" ] || {
+    RUNS='[]'
+    return 1
+  }
+  CANARY_PART=issues
   json=$(curl -fsS --retry 3 --connect-timeout 20 --max-time 60 -A craft-update \
     -H 'Accept: application/vnd.github+json' "$API/$LAYER_REPO/issues?labels=canary&state=all&per_page=100") || return 1
-  ISSUES=$(printf '%s' "$json" | jq -c 'if type == "array" then [ .[] | select(.pull_request == null) | {state, html_url, created_at, closed_at} ] else error("not a list") end') || {
+  ISSUES=$(printf '%s' "$json" | jq -c 'if type == "array" then [ .[] | select(.pull_request == null) | {state, html_url, created_at, closed_at} ] else error("not a list") end') &&
+    [ -n "$ISSUES" ] || {
     ISSUES='[]'
     return 1
   }
   OPEN=$(printf '%s' "$ISSUES" | jq -r '[ .[] | select(.state == "open") | .html_url ] | first // empty')
-  FAILED=$(printf '%s' "$ISSUES" | jq -r --argjson since "$since" --argjson now "$(date +%s)" --argjson start "$CANARY_START" '
-    ((((($since - $start) / 86400) | floor) + 1) * 86400 + $start + 10800) as $end
-    | [ .[] | select((.created_at | fromdateiso8601) > $since
-        or ($now >= $end and (.closed_at == null or (.closed_at | fromdateiso8601) > $end))) ]
+  FAILED=$(jq -nr --argjson since "$since" --argjson runs "$RUNS" --argjson issues "$ISSUES" "$CANARY_JQ"'
+    ([ $runs[] | select(.start > $since) ] | first) as $r
+    | [ $issues[] | select((.created_at | fromdateiso8601) > $since
+        or ($r != null and (.created_at | fromdateiso8601) <= $r.at
+            and (.closed_at == null or (.closed_at | fromdateiso8601) > (if $r.rerun then $r.start else $r.at end)))) ]
     | sort_by(.created_at) | last | .html_url // empty')
+  if [ -z "$FAILED" ] && [ "$(sed -n 2p "$STATE/canary-failed" 2>/dev/null)" = "$LAYER_VERSION $since" ]; then
+    FAILED=$(head -n 1 "$STATE/canary-failed")
+  fi
+  newest=$(jq -nr --argjson runs "$RUNS" --argjson issues "$ISSUES" "$CANARY_JQ"'
+    $runs | last // empty | "\(.start) \(.conclusion)" + (if .rerun then ", re-run" else "" end)
+      + (if passed(.) | not then ", canary issue open" elif .conclusion == "failure" then ", no canary issue" else "" end)')
+  if [ -z "$newest" ]; then
+    STALE=none
+    return 0
+  fi
+  if [ $(( $(date +%s) - ${newest%% *} )) -gt "$CANARY_STALE" ]; then
+    STALE=$(date -d "@${newest%% *}" '+%F %T')
+  else
+    log "layer: newest canary run started $(date -d "@${newest%% *}" '+%F %T') (${newest#* })"
+  fi
 }
 
 # shellcheck disable=SC1111 # typographic quotes in the texts of the start page
@@ -383,10 +442,12 @@ footer{margin-top:30px;color:var(--mut);font-size:.8125rem;text-align:center}
 <div class="brand"><svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><rect width="14" height="14" rx="4" fill="#12a58a"/><rect x="18" width="14" height="14" rx="4" fill="#2f7bf5"/><rect y="18" width="14" height="14" rx="4" fill="#e8573f"/><rect x="18" y="18" width="14" height="14" rx="4" fill="#7bb51c"/></svg>
 HTML
     printf '<div><h1>Craft</h1><p>%s</p></div></div>\n%s\n</header>\n<main>\n' "$tagline" "$link"
-    if grep -q '^ERROR' "$STATE/status" 2>/dev/null; then
-      any=
-      for a in $APPS; do any=$any$(version_of "$a"); done
-      if [ -n "$any" ]; then printf '<p class="err">%s</p>\n' "$err"; else printf '<p class="err">%s</p>\n' "$none"; fi
+    any=
+    for a in $APPS; do any=$any$(version_of "$a"); done
+    if [ -z "$any" ]; then
+      printf '<p class="err">%s</p>\n' "$none"
+    elif grep -q '^ERROR' "$STATE/status" 2>/dev/null; then
+      printf '<p class="err">%s</p>\n' "$err"
     fi
     if [ -n "$INJ" ] && [ "$CANARY" != off ] && [ -s "$STATE/canary-failed" ]; then
       read -r hurl < "$STATE/canary-failed"
@@ -435,14 +496,19 @@ update_app() {
   esac
   canary=off
   [ -n "$INJ" ] && [ "$CANARY" != off ] && canary=on
+  # Without the runs no release counts as tested; the hold keeps them all back, and the choice
+  # without the canary only names the release that waits.
+  [ "$HOLD" = "canary runs not readable" ] && canary=off
   # The newest release (by version) that is MIN_AGE old (counted from its last upload), newer than
-  # the installed and the blocked version, and has a web build. With the canary check on, also: the
-  # first daily canary start after it was still the newest release two hours later (so that run
-  # tested it), three hours have passed since (the run has finished), and no canary issue was open
-  # at that point (it passed).
+  # the installed and the blocked version, and has a web build. With the canary check on, also:
+  # the first canary run created after its last upload has ended, no release of the app came out
+  # before that run ended (so the run tested this one), and the run passed. A release that was not
+  # the newest during its first run is never taken, and neither is one whose first run did not
+  # pass: later runs test the layer's main branch, not the pinned layer. The app's next release
+  # that passes its own first run is taken.
   pick=$(printf '%s' "$json" | jq -r --arg app "$app" --argjson now "$now" --argjson minage "$MIN_AGE" \
-      --arg old "$old" --arg blocked "$blocked" --arg canary "$canary" --argjson start "$CANARY_START" \
-      --argjson issues "$ISSUES" '
+      --arg old "$old" --arg blocked "$blocked" --arg canary "$canary" \
+      --argjson runs "$RUNS" --argjson issues "$ISSUES" "$CANARY_JQ"'
     def sv: split(".") | map(tonumber);
     [ .[] | select(.draft == false and .prerelease == false and .published_at != null) ] as $all
     | [ $all[] | .published_at | fromdateiso8601 ] as $times
@@ -457,12 +523,9 @@ update_app() {
       | select($z != null and $s != null)
       | ([.published_at, $z.updated_at, $s.updated_at] | map(select(. != null) | fromdateiso8601) | max) as $p
       | select($p <= $now - $minage)
-      | ((((($p - $start) / 86400) | floor) + 1) * 86400 + $start) as $t
       | ([ $times[] | select(. > $pub) ] | min) as $next
-      | select($canary != "on" or (
-          ($next == null or $next >= $t + 7200) and $now >= $t + 10800
-          and ([ $issues[] | select((.created_at | fromdateiso8601) < $t + 10800
-                 and (.closed_at == null or (.closed_at | fromdateiso8601) > $t + 10800)) ] | length) == 0))
+      | ([ $runs[] | select(.start > $p) ] | first) as $r
+      | select($canary != "on" or ($r != null and ($next == null or $next > $r.end) and passed($r)))
       | [$v, $z.name, $z.browser_download_url, ($z.digest // "-"), $s.browser_download_url] ]
     | max_by(.[0] | sv) // empty | join("|")') || {
     log "$app: ERROR - unreadable answer from GitHub"
@@ -659,28 +722,42 @@ if [ "${1:-}" = "--rollback" ]; then
 fi
 
 errors=0
+# state/canary-failed changes only when the canary could be read.
+FAILED=keep
 if ! layer_ready; then
   errors=$((errors + 1))
   HOLD="layer not available"
 elif [ -n "$INJ" ] && [ "$CANARY" != off ]; then
   if ! canary_check; then
     errors=$((errors + 1))
-    log "layer: ERROR - cannot read the canary issues of $LAYER_REPO, new releases wait"
-    HOLD="canary issues not readable"
-    FAILED=keep
-  elif [ -n "$FAILED" ]; then
-    errors=$((errors + 1))
-    log "layer: ERROR - the canary failed ($FAILED) since layer $LAYER_VERSION came into use: new releases wait until another layer version is in use, or you confirm that the failure does not concern it (operations.md, The canary hold)"
-    HOLD="canary failure"
-  elif [ -n "$OPEN" ]; then
-    log "layer: the canary reports a failure ($OPEN), new releases wait while the issue is open"
-    HOLD="open canary issue"
+    log "layer: ERROR - cannot read the canary $CANARY_PART of $LAYER_REPO, new releases wait"
+    HOLD="canary $CANARY_PART not readable"
+  else
+    case $STALE in
+      '') ;;
+      none)
+        errors=$((errors + 1))
+        log "layer: ERROR - the canary of $LAYER_REPO has no finished run: new releases wait for one (how-it-works.md, The canary)"
+        ;;
+      *)
+        errors=$((errors + 1))
+        log "layer: ERROR - the newest canary run of $LAYER_REPO started $STALE, more than three days ago: releases that came out since wait for a run (how-it-works.md, The canary)"
+        ;;
+    esac
+    if [ -n "$FAILED" ]; then
+      errors=$((errors + 1))
+      log "layer: ERROR - the canary failed ($FAILED) since layer $LAYER_VERSION came into use: new releases wait until another layer version is in use, or you confirm that the failure does not concern it (operations.md, The canary hold)"
+      HOLD="canary failure"
+    elif [ -n "$OPEN" ]; then
+      log "layer: the canary reports a failure ($OPEN), new releases wait while the issue is open"
+      HOLD="open canary issue"
+    fi
   fi
 fi
 case $FAILED in
   keep) ;;
   '') rm -f "$STATE/canary-failed" ;;
-  *) echo "$FAILED" > "$STATE/canary-failed" ;;
+  *) printf '%s\n%s\n' "$FAILED" "$LAYER_VERSION $since" > "$STATE/canary-failed" ;;
 esac
 for a in $APPS; do
   update_app "$a" || errors=$((errors + 1))

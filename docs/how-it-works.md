@@ -54,7 +54,8 @@ CRAFT_DATA_DIR/
     <app>.previous            the version a rollback goes back to
     <app>.blocked             a version that is not taken, nor any lower one
     canary-since              per layer version: the time from which its canary failures count
-    canary-failed             the canary issue that holds new releases (see below)
+    canary-failed             the canary failure that holds new releases (see below): the issue,
+                              then the layer version and time from canary-since it belongs to
   layer/
     craftsuite-layer-hosting-<version>/        the pinned layer bundle (hosting/, translators/)
 ```
@@ -77,10 +78,12 @@ For each app in `CRAFT_APPS`:
    pre-release, it has the assets `<app>-web-<version>.zip` and `SHA256SUMS.txt`, it was published
    at least `CRAFT_MIN_AGE_HOURS` ago, and its version is higher than the installed one and than a
    blocked one. If its files were replaced after publication, the age counts from the last upload.
-   With the canary check on, the first canary run that tested it must have passed (below). The
-   highest qualifying version is taken; the updater never moves to a lower version by itself.
-3. **Hold back?** While a canary issue is open, after a canary failure, or while the layer bundle
-   cannot be used, no new release is taken (see below). The installed version stays.
+   With the canary check on, the first canary run after it must have tested and passed it
+   (below). The highest qualifying version is taken; the updater never moves to a lower version by
+   itself.
+3. **Hold back?** While a canary issue is open, after a canary failure, while the canary's runs or
+   issues cannot be read, or while the layer bundle cannot be used, no new release is taken (see
+   below). The installed version stays.
 4. **Download and verify.** The zip and `SHA256SUMS.txt` come from
    `https://github.com/storytold/<app>/releases/download/v<version>/`. The zip's SHA-256 must
    match its line in `SHA256SUMS.txt` **and** the digest GitHub reports for the asset. Every entry
@@ -102,9 +105,9 @@ For each app in `CRAFT_APPS`:
    translator waits that long for the app to start instead of 60 s: these apps load their large
    `.wasm` while that timer runs, and 60 s is too short below about 3 Mbit/s (LightCraft) and 2.4
    Mbit/s (EffectCraft) ([configuration.md](configuration.md#nextcloud-integration)). Layer 0.1.0 has no such option
-   and gets none. The script of layer 0.2.0 also replaces a service worker at the build's root,
-   `sw.js` (EffectCraft's), with one that serves nothing, deletes the app's caches and
-   unregisters itself; the original stays as `craftsuite-layer/sw.js.orig`. With the apps and
+   and gets none. The script of layer 0.2.0 and later also replaces a service worker at the
+   build's root, `sw.js` (EffectCraft's), with one that serves nothing, deletes the app's caches
+   and unregisters itself; the original stays as `craftsuite-layer/sw.js.orig`. With the apps and
    Nextcloud on the same site, a worker registered by a direct visit would also control the apps
    in the Nextcloud frame and answer with an old `index.html` and translator. Exit code 0: go
    on. Exit code 6 (the layer has no adapter for this app): go on without the translator. Any
@@ -124,9 +127,9 @@ For each app in `CRAFT_APPS`:
 Afterwards the run writes `state/status` and the start page. Any error makes the status
 `ERROR <count>`: the start page shows a red notice, `craft-update` turns unhealthy, the apps keep
 running in their previous version, and the updater tries again an hour later (up to three times,
-then at the next daily time). A run takes one API request per app and one for the canary issues
-(only with the Nextcloud integration and the canary check on): twelve with the eleven apps.
-Machines behind the same public IP address share the limit of 60 per hour.
+then at the next daily time). A run takes one API request per app and two for the canary, its runs
+and its issues (only with the Nextcloud integration and the canary check on): thirteen with the
+eleven apps. Machines behind the same public IP address share the limit of 60 per hour.
 
 ### The layer bundle
 
@@ -140,47 +143,88 @@ move to another layer release; the old bundle is then removed.
 
 ### The canary
 
-The layer's repository runs a canary every day at 04:23 UTC: it fetches the newest release of each
-app, tests the translators of the layer's main branch against it, and opens an issue labelled
-`canary` when that fails (a failing run while it is open comments on it; the next passing run
-closes it). With the Nextcloud integration on and `CRAFTSUITE_CANARY=on`, the updater follows
-three rules:
+The layer's repository has a canary, the workflow `canary.yml`, which runs daily on a schedule and
+when started by hand. A run fetches the newest release of each app, tests the translators of the
+layer's main branch against it, and opens an issue labelled `canary` when that fails (a failing
+run while it is open comments on it; the next passing run closes it). With the Nextcloud
+integration on and `CRAFTSUITE_CANARY=on`, every update run reads the canary's finished runs on
+`main` and its `canary` issues. Only runs that ended with `success` or `failure` count; a
+cancelled one (a timeout, for example) tested nothing.
 
-1. **While a `canary` issue is open, no new release is taken.** The run logs it; this is a normal
-   wait, not an error. Only an app that is not installed yet counts as an error until then.
+A run starts, for the updater, at its creation (`created_at`), not at `run_started_at`: a re-run
+resets that time, and a re-run of failed jobs keeps the canary job's earlier result. A run opens
+or closes its issue in its last job, just before it ends, so the updater looks at the issues at
+the run's check time: a minute after its end, or at the next counted run's start if that comes
+sooner, but never before the end. The run passed if no `canary` issue was open then; a re-run
+passed only if none was open at any time from its creation to its check time (an earlier attempt
+may have failed). The updater follows three rules:
+
+1. **While a `canary` issue is open, no new release is taken.** For an issue from before your
+   layer version came into use (or before a confirmation, rule 3), until the first counted run
+   since then has ended, this is a normal wait, not an error: the run logs it, and only an app
+   that is not installed yet counts as an error. Any other open issue is a failure (rule 3).
 2. **A release is taken only if the first canary run after it tested and passed it.** That run
-   is the first daily 04:23 UTC start after the release (after its last upload, if its files were
-   replaced). The release must still have been the newest release of its app two hours after that
-   start, so that the run tested it and not a newer one, and the run counts as passed when no
-   `canary` issue was open three hours after the start. A release that was replaced by a newer one
-   before that is never taken; the newer one is. A release whose first run failed is never taken,
-   even if later runs pass.
+   is the first counted run that started after the release was published (after its last upload,
+   if its files were replaced). The release must still have been the newest release of its app
+   when that run ended, so that the run tested it and not a newer one, and the run must have
+   passed. A release that was replaced by a newer one before that is never taken; the newer one
+   is. Neither is a release whose first run did not pass, even if later runs pass, and also not
+   after another layer version, a confirmation or a rebuilt data folder: later runs test the
+   layer's main branch, not the pinned layer release. The app's next release that passes its own
+   first run is taken.
 3. **A failure holds new releases until you act.** A failure is a `canary` issue opened after the
-   current `CRAFTSUITE_LAYER_VERSION` came into use (recorded in `state/canary-since`), or one that
-   is still open after the first canary run since then (a failing run comments on the open issue
-   instead of opening a new one). It holds every new release of every app, also after the issue
-   is closed: the canary tests the layer's main branch,
-   so a passing run after a fix there does not show that the pinned layer release handles the new
-   app releases. The hold counts as an error, so the start page, the status and the health check
-   show it. It ends when another layer version is in use (a bundle that fails its checks does
-   not count; going back to a version keeps the time it first came into use, and so its failures),
-   or when you confirm that the failure does not concern your layer version by removing
-   `state/canary-since` ([operations.md](operations.md#the-canary-hold)); failures count again from
-   that moment.
+   current `CRAFTSUITE_LAYER_VERSION` came into use (recorded in `state/canary-since`), or one open
+   at the check time of the first counted run that started since then, for a re-run at any time
+   during it (a failing run comments on the open issue instead of opening a new one). It holds
+   every new release of every app, also after the issue is closed: the canary tests the layer's
+   main branch, so a passing run after a fix there does not show that the pinned layer release
+   handles the new app releases. Once found, a failure is kept in `state/canary-failed`, and it
+   keeps holding when its run is re-run or drops out of the last 100 runs. The hold counts as an
+   error, so the start page, the status and the health check show it. It ends when another layer
+   version is in use (a bundle that fails its checks does not count; going back to a version keeps
+   the time it first came into use, and so its failures), or when you confirm that the failure
+   does not concern your layer version by removing `state/canary-since`
+   ([operations.md](operations.md#the-canary-hold)); failures count again from that moment.
 
 The hold is global: the updater does not look at which app an issue is about, so a failure of any
 app, also of one that is not in `CRAFT_APPS`, holds the new releases of all apps. Only the label
-`canary` counts; the layer's issues labelled `canary-ui` or `canary-nextcloud` hold nothing.
+`canary` counts; the layer's issues labelled `canary-ui` or `canary-nextcloud` hold nothing, and a
+run that failed only in the layer's look at the next Nextcloud release opens no `canary` issue
+and counts as passed.
 
-Limits: the check relies on the canary running on schedule. GitHub can delay scheduled runs and
-turns schedules off after 60 days without activity in a public repository; no run means no issue,
-and releases are then taken as if they had passed. The canary decides with Chromium only: the
-layer runs the apps' WebKit tests without letting them decide and runs no app in Firefox, so a
-release that breaks the translator only in Safari (also on the iPad) or Firefox opens no `canary`
-issue. A new or rebuilt data folder knows no earlier failures: failures count from its first run.
-GitHub keeps no earlier close time when an issue is reopened, so a reopened canary issue counts as
-open from its creation to its last close. Watch the layer's repository
-([operations.md](operations.md#staying-informed)).
+Each run logs when the newest counted run started and how it ended, as in
+`layer: newest canary run started <time> (success)`. After `success` or `failure` come `, re-run`
+for a re-run, then `, canary issue open` if the run did not pass, or `, no canary issue` if it
+failed but counts as passed. GitHub starts scheduled runs late, skips some, and turns a schedule
+off after 60 days without activity in a public repository. So when that run started more than
+three days ago, or there is none, the run reports an error instead
+(`layer: ERROR - the newest canary run of … started …, more than three days ago: …`, or
+`… has no finished run: …`), which the status, the start page and the health check show. It
+holds nothing: releases that an earlier run tested are still taken, and those that came out since
+wait for a run; without any run, no new release is taken. The error cannot be acknowledged: it
+ends only with a new counted run (a re-run of an older one keeps that run's start), or with the
+canary check off (`CRAFTSUITE_CANARY=off`, or the Nextcloud integration off).
+
+Limits: only the last 100 finished runs are looked at (about three months of daily runs); for a
+release older than all of them, the oldest of them that counts stands in for its first run, so a
+release that stayed its app's newest for that long is judged by that run, even if its own first
+run failed. A run
+that failed without a `canary` issue counts as passed, as one where only the look at the next
+Nextcloud release failed. Rarely, though, its canary job was cancelled while that look failed, or
+its report job failed after a canary failure; the run's data cannot show this. The minimum age
+(`CRAFT_MIN_AGE_HOURS`) gives the next run time to report such a failure before the release is
+taken only if that run ends within it: the age counts from the release, and the next daily run
+comes about a day after the first, so the default of 24 hours does not reliably cover it; two to
+three days leave room for a late next run. No GitHub token is sent, although the layer's
+documentation suggests one where the 60 requests per hour are shared: when other machines behind
+your public IP address use them up, the run fails and tries again an hour later.
+
+The canary decides with Chromium only: the layer runs the apps' WebKit tests without letting them
+decide and runs no app in Firefox, so a release that breaks the translator only in Safari (also on
+the iPad) or Firefox opens no `canary` issue. A new or rebuilt data folder knows no earlier
+failures: failures count from its first run. GitHub keeps no earlier close time when an issue is
+reopened, so a reopened canary issue counts as open from its creation to its last close. Watch the
+layer's repository ([operations.md](operations.md#staying-informed)).
 
 ## Headers
 

@@ -34,9 +34,10 @@ update (daily) ──▶ GitHub releases: download, verify, add translator, comp
   [nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer): the updater
   adds the layer's small translator script to each app, the web server allows your Nextcloud to
   frame the apps, and Nextcloud gets "Open in PdfCraft" and friends. Files open from Nextcloud and
-  save back to it, as the signed-in user, without a download. App releases are taken only if the
-  layer's daily canary reported no failure for them, and a canary failure holds new releases until
-  you upgrade the layer or confirm (limits: [docs/how-it-works.md](docs/how-it-works.md#the-canary)).
+  save back to it, as the signed-in user, without a download. App releases are taken only once the
+  first run of the layer's canary after them has tested and passed them; a canary failure holds
+  new releases until you upgrade the layer or confirm, and a canary that stopped running is
+  reported after three days (limits: [docs/how-it-works.md](docs/how-it-works.md#the-canary)).
 - **Locked-down containers**: read-only file systems, no capabilities, unprivileged users; only
   the web container is reachable from outside.
 
@@ -51,7 +52,9 @@ update (daily) ──▶ GitHub releases: download, verify, add translator, comp
   hairpin NAT or split DNS). For Nextcloud as the provider and for the Nextcloud integration:
   Nextcloud 34 or 35, see [docs/nextcloud.md](docs/nextcloud.md).
 - Outgoing HTTPS from the Docker host to `api.github.com`, `github.com`,
-  `release-assets.githubusercontent.com` and `raw.githubusercontent.com`.
+  `release-assets.githubusercontent.com` and `raw.githubusercontent.com`. A run makes up to
+  thirteen requests to the GitHub API, of the 60 per hour that all machines behind the same public
+  IP address share.
 - Browsers with WebGL 2. The apps are desktop-sized; a tablet works, a phone is cramped.
 
 ## Quick start
@@ -115,15 +118,16 @@ Then, if you use Nextcloud: turn on the integration as described in
 ## Versions
 
 This release pins oauth2-proxy v7.15.5, nginx 1.30 (`nginxinc/nginx-unprivileged:1.30-alpine-slim`)
-and Alpine 3.24 for the updater. Before the release, nginx and the updater from the generated
-`compose.yaml` ran in a local setup with oauth2-proxy v7.15.5 and a test sign-in, with GitHub
-answered from saved responses and the real release files. The updater ran against the web builds
-of PdfCraft 0.5.0 and 0.6.0, PhotoCraft 0.6.0 and 0.7.0, VectorCraft 0.8.0 and 0.9.0, DesignCraft
-0.5.0 and 0.6.0, WordCraft 0.5.0, GridCraft 0.5.0, DeckCraft 0.5.0, CADCraft 0.5.0, LightCraft
-0.5.0 and 0.6.0, FilmCraft 0.6.0 and EffectCraft 0.7.0 and 0.8.0 with nextcloud-craftsuite-layer
-0.2.0 and back to 0.1.0; the headers of nginx were checked, and all eleven apps started in headless
-Chromium through it. Opening and saving from Nextcloud is tested by the layer itself, for the Craft
-versions its release lists. The Craft apps are not pinned here: the updater follows their releases.
+and Alpine 3.24 for the updater, as 0.2.0 did. Before the release, the updater from the generated
+`compose.yaml` ran in a local setup, with GitHub's answers (releases, canary runs and issues) saved
+or made up for each case, against the web builds of PdfCraft 0.5.0, 0.6.0 and 0.7.1, PhotoCraft
+0.7.0, VectorCraft 0.9.0 and 0.10.0, DesignCraft 0.6.0, WordCraft 0.5.0 and 0.6.1, GridCraft 0.5.0,
+DeckCraft 0.5.0, CADCraft 0.5.0, LightCraft 0.6.0, FilmCraft 0.6.0 and EffectCraft 0.8.0, with
+nextcloud-craftsuite-layer 0.4.0 (also on the way from craftsuite-webapp 0.2.0 with layer 0.2.0
+and back) and with layer 0.1.0. nginx, oauth2-proxy and their configuration are unchanged from
+0.2.0, where their headers were checked. Opening and saving from Nextcloud is tested by the layer
+itself, for the Craft versions its release lists. The Craft apps are not pinned here: the updater
+follows their releases.
 
 ## Affiliation and trademarks
 
