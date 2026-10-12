@@ -1,6 +1,7 @@
 # craftsuite-webapp: the Craft web apps by storytold (PdfCraft, PhotoCraft, VectorCraft,
-# DesignCraft) behind an OpenID Connect sign-in, kept up to date from their GitHub releases,
-# and optionally opening files from Nextcloud through nextcloud-craftsuite-layer.
+# DesignCraft, WordCraft, GridCraft, DeckCraft, CADCraft, LightCraft, FilmCraft, EffectCraft)
+# behind an OpenID Connect sign-in, kept up to date from their GitHub releases, and optionally
+# opening files from Nextcloud through nextcloud-craftsuite-layer.
 #
 # Settings come from .env next to this file (copy .env.example). Documentation: README.md and
 # docs/. For a UI that takes one YAML without an .env file (TrueNAS SCALE custom apps), render
@@ -103,8 +104,11 @@ services:
           types {
             application/javascript mjs;
             font/ttf ttf;
+            font/otf otf;
+            application/manifest+json webmanifest;
           }
           default_type application/octet-stream;
+          charset utf-8;
           client_body_temp_path /tmp/client_temp;
           proxy_temp_path /tmp/proxy_temp;
           fastcgi_temp_path /tmp/fastcgi_temp;
@@ -120,13 +124,15 @@ services:
           gzip_vary on;
           gzip_proxied any;
           gzip_comp_level 5;
-          gzip_types text/css text/plain application/javascript application/json application/wasm image/svg+xml font/ttf;
+          gzip_types text/css text/plain application/javascript application/json application/manifest+json application/wasm image/svg+xml font/ttf font/otf;
 
+          # A year only for names with Trunk's content hash (app-web-9fbc20856b2df0f8_bg.wasm, up to 16
+          # hex digits); names that stay the same across releases (worker.js, sw.js, ...) revalidate.
           map "$$status:$$uri" $$craft_cache_control {
             default "no-cache";
             ~^\d+:/oauth2/ "";
             ~^\d+:/[^/]+/craftsuite-layer/ "no-cache";
-            ~^(?:200|206|304):.*\.(?:js|mjs|wasm)$$ "private, max-age=31536000, immutable";
+            "~^(?:200|206|304):.*-[0-9a-f]{8,16}(?:_bg)?\.(?:js|mjs|wasm)$$" "private, max-age=31536000, immutable";
           }
 
           map $$request_uri $$craft_return_to {
@@ -234,13 +240,14 @@ services:
         set -u
         umask 022
 
-        APPS=$${CRAFT_APPS:-"pdfcraft photocraft vectorcraft designcraft"}
+        APPS=$${CRAFT_APPS:-"pdfcraft photocraft vectorcraft designcraft wordcraft gridcraft deckcraft cadcraft lightcraft filmcraft effectcraft"}
         BASE=$${CRAFT_BASE:-/craft}
         LANGUAGE=$${CRAFT_LANGUAGE:-en}
         LAYER_VERSION=$${CRAFTSUITE_LAYER_VERSION:-}
         LAYER_SHA256=$${CRAFTSUITE_LAYER_SHA256:-}
         LAYER_REPO=$${CRAFTSUITE_LAYER_REPO:-hozwei/nextcloud-craftsuite-layer}
         CANARY=$${CRAFTSUITE_CANARY:-on}
+        STARTUP_TIMEOUTS=$${CRAFTSUITE_STARTUP_TIMEOUTS-"lightcraft=180000 effectcraft=180000"}
         API=https://api.github.com/repos
         RAW=https://raw.githubusercontent.com/storytold
         WWW=$$BASE/www
@@ -285,16 +292,37 @@ services:
             photocraft) name=PhotoCraft short=Ph ;;
             vectorcraft) name=VectorCraft short=Vc ;;
             designcraft) name=DesignCraft short=Dc ;;
+            wordcraft) name=WordCraft short=Wd ;;
+            gridcraft) name=GridCraft short=Gr ;;
+            deckcraft) name=DeckCraft short=Dk ;;
+            cadcraft) name=CADCraft short=Cd ;;
+            lightcraft) name=LightCraft short=Lt ;;
+            filmcraft) name=FilmCraft short=Fm ;;
+            effectcraft) name=EffectCraft short=Fx ;;
           esac
           case $$LANGUAGE:$$1 in
             de:pdfcraft) text="PDFs ansehen, kommentieren und bearbeiten" ;;
             de:photocraft) text="Fotos und Ebenen bearbeiten, auch PSD" ;;
             de:vectorcraft) text="Vektorgrafiken und Logos zeichnen, auch SVG" ;;
             de:designcraft) text="Layouts und Drucksachen setzen" ;;
+            de:wordcraft) text="Texte schreiben und gestalten, auch DOCX" ;;
+            de:gridcraft) text="Tabellen berechnen und auswerten, auch XLSX" ;;
+            de:deckcraft) text="Präsentationen gestalten, auch aus PPTX" ;;
+            de:cadcraft) text="2D-Zeichnungen konstruieren, im DXF-Format" ;;
+            de:lightcraft) text="Fotos und Kamera-RAWs entwickeln und exportieren" ;;
+            de:filmcraft) text="Videos und Filmprojekte schneiden" ;;
+            de:effectcraft) text="Animationen und visuelle Effekte gestalten" ;;
             en:pdfcraft) text="View, annotate and edit PDFs" ;;
             en:photocraft) text="Edit photos and layers, PSD included" ;;
             en:vectorcraft) text="Draw vector graphics and logos, SVG included" ;;
             en:designcraft) text="Lay out pages and print matter" ;;
+            en:wordcraft) text="Write and format documents, DOCX included" ;;
+            en:gridcraft) text="Calculate and analyse spreadsheets, XLSX included" ;;
+            en:deckcraft) text="Build presentations, also from PPTX" ;;
+            en:cadcraft) text="Draft 2D drawings in DXF" ;;
+            en:lightcraft) text="Develop and export photos and camera raws" ;;
+            en:filmcraft) text="Edit videos and film projects" ;;
+            en:effectcraft) text="Create animations and visual effects" ;;
           esac
         }
 
@@ -346,6 +374,12 @@ services:
             log "layer: ERROR - CRAFTSUITE_ALLOWED_ORIGINS is empty: name the Nextcloud origins that may frame the apps"
             return 1
           fi
+          # shellcheck disable=SC2086 # one entry per line; the injector takes 1 to 2147483647 ms
+          if printf '%s\n' $$STARTUP_TIMEOUTS | awk -F= 'NF && !(NF == 2 && $$1 ~ /^[a-z0-9_-]+$$/ &&
+               $$2 ~ /^[1-9][0-9]*$$/ && length($$2) <= 10 && $$2 + 0 <= 2147483647) { bad = 1 } END { exit !bad }'; then
+            log "layer: ERROR - CRAFTSUITE_STARTUP_TIMEOUTS takes entries such as lightcraft=180000 (milliseconds, at most 2147483647), separated by spaces"
+            return 1
+          fi
           bundle=craftsuite-layer-hosting-$$LAYER_VERSION
           dir=$$LAYERS/$$bundle
           if [ ! -f "$$dir/hosting/inject-translator.sh" ] ||
@@ -394,12 +428,27 @@ services:
           INJ=$$dir/hosting/inject-translator.sh
         }
 
+        # The startup timeout of app $$1 from CRAFTSUITE_STARTUP_TIMEOUTS ("lightcraft=180000 ..."), as
+        # an option for inject-translator.sh in TIMEOUT (empty: the translator's default). The injector
+        # writes it into its block, so every run passes it, --check included. The injector of layers
+        # before 0.2.0 has no such option and gets none.
+        timeout_of() {
+          TIMEOUT=
+          grep -q -e '--startup-timeout' "$$INJ" 2>/dev/null || return 0
+          for t in $$STARTUP_TIMEOUTS; do
+            case $$t in "$$1="*) TIMEOUT=--startup-timeout=$${t#*=} ;; esac
+          done
+        }
+
         # Adds the translator to the web build in $$3 (app $$1, version $$2), with the origins from
         # CRAFTSUITE_ALLOWED_ORIGINS. Returns 1 if the build must not be switched to.
         add_translator() {
           [ -n "$$INJ" ] || return 0
-          sh "$$INJ" -c -q --app "$$1" --app-version "$$2" "$$3" >/dev/null 2>&1 && return 0
-          sh "$$INJ" -q --app "$$1" --app-version "$$2" "$$3"
+          timeout_of "$$1"
+          # shellcheck disable=SC2086 # TIMEOUT is empty or one word
+          sh "$$INJ" -c -q --app "$$1" --app-version "$$2" $$TIMEOUT "$$3" >/dev/null 2>&1 && return 0
+          # shellcheck disable=SC2086
+          sh "$$INJ" -q --app "$$1" --app-version "$$2" $$TIMEOUT "$$3"
           rc=$$?
           case $$rc in
             0)
@@ -450,7 +499,7 @@ services:
         start_page() {
           if [ "$$LANGUAGE" = de ]; then
             when=$$(date -r "$$STATE/status" '+%d.%m.%Y um %H:%M' 2>/dev/null) || when="?"
-            tagline="Bild, Vektor, Layout und PDF – direkt im Browser"
+            tagline="Büro, Grafik, Foto, Video und PDF – direkt im Browser"
             open="Öffnen"
             err="Die letzte Update-Prüfung hatte Fehler. Die Apps laufen in ihrer bisherigen Version weiter, Einzelheiten stehen im Log von craft-update."
             none="Noch ist keine App installiert; warum, steht im Log von craft-update."
@@ -466,7 +515,7 @@ services:
             footer="Updates täglich um $$(esc "$${CRAFT_UPDATE_TIME:-07:00}") Uhr · zuletzt geprüft am $$when Uhr"
           else
             when=$$(date -r "$$STATE/status" '+%Y-%m-%d %H:%M' 2>/dev/null) || when="?"
-            tagline="Image, vector, layout and PDF – right in the browser"
+            tagline="Office, graphics, photo, video and PDF – right in the browser"
             open="Open"
             err="The last update check had errors. The apps keep running in their current version; the log of craft-update has the details."
             none="No app is installed yet; the log of craft-update says why."
@@ -512,6 +561,8 @@ services:
         .nc:hover{border-color:color-mix(in srgb,#2f7bf5 45%,var(--line))}
         .apps{list-style:none;margin:0;padding:0;display:grid;gap:18px}
         .pdfcraft{--c:#12a58a}.photocraft{--c:#2f7bf5}.vectorcraft{--c:#e8573f}.designcraft{--c:#7bb51c}
+        .wordcraft{--c:#3d5bd9}.gridcraft{--c:#1e9e57}.deckcraft{--c:#f0761e}.cadcraft{--c:#1a9fd5}
+        .lightcraft{--c:#eca312}.filmcraft{--c:#8b5cf6}.effectcraft{--c:#e0409a}
         .app{display:flex;align-items:center;gap:16px;height:100%;padding:12px;border:1px solid var(--line);border-radius:22px;background:var(--card);box-shadow:var(--sh);color:inherit;text-decoration:none;-webkit-tap-highlight-color:transparent;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
         .art{flex:none;display:grid;place-items:center;width:96px;height:96px;border-radius:16px;background:radial-gradient(circle at 50% 38%,color-mix(in srgb,var(--c) 34%,var(--art)),color-mix(in srgb,var(--c) var(--mix),var(--art)) 70%)}
         .ico{display:block;width:72px;height:72px;border-radius:22%;filter:drop-shadow(0 10px 16px color-mix(in srgb,var(--c) 45%,transparent));transition:transform .25s cubic-bezier(.2,.8,.2,1.2)}
@@ -725,13 +776,22 @@ services:
             return 1
           fi
           rm -f "$$src/README.md" "$$src/HOSTING.md" "$$src/_headers" "$$src/.htaccess"
+          # The leftovers of a Cargo build next to the site (LightCraft's release ships build/, deps/,
+          # .fingerprint/ and more): the page never loads them, so they are not served. Brotli copies
+          # go too; the web server serves the .gz copies written below.
+          if [ -d "$$src/.fingerprint" ] || [ -f "$$src/.cargo-lock" ]; then
+            for d in build deps examples incremental .fingerprint; do drop "$$src/$$d"; done
+            rm -f "$$src"/.cargo-*lock
+            log "$$app: Cargo build leftovers removed from $$ver"
+          fi
+          find "$$src" -type f -name '*.br' -exec rm -f {} +
           fetch_icon "$$app" "$$ver" "$$src" || log "$$app: no icon for $$ver, the start page shows a letter tile"
           if ! add_translator "$$app" "$$ver" "$$src"; then
             drop "$$tmp"
             log "$$app: $$ver not switched to, $${old:-nothing} stays"
             return 1
           fi
-          find "$$src" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.mjs' -o -name '*.html' \) -exec gzip -9 -k -f {} \;
+          find "$$src" -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.mjs' -o -name '*.html' -o -name '*.otf' \) -exec gzip -9 -k -f {} \;
           chmod -R a+rX "$$src"
           dest=$$REL/$$app-$$ver
           drop "$$dest"
@@ -781,7 +841,9 @@ services:
               v=$$(version_of "$$a")
               nc=-
               if [ -n "$$v" ] && [ -n "$$INJ" ]; then
-                if sh "$$INJ" -c -q --app "$$a" --app-version "$$v" "$$REL/$$a-$$v" >/dev/null 2>&1; then nc=yes; else nc=no; fi
+                timeout_of "$$a"
+                # shellcheck disable=SC2086 # TIMEOUT is empty or one word
+                if sh "$$INJ" -c -q --app "$$a" --app-version "$$v" $$TIMEOUT "$$REL/$$a-$$v" >/dev/null 2>&1; then nc=yes; else nc=no; fi
               fi
               echo "$$a: $${v:--} (previous $$(cat "$$STATE/$$a.previous" 2>/dev/null || echo -), blocked $$(cat "$$STATE/$$a.blocked" 2>/dev/null || echo -), Nextcloud $$nc)"
             done
@@ -906,7 +968,7 @@ services:
       PATH: "/tmp/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       CRAFT_UPDATE_TIME: "${CRAFT_UPDATE_TIME:-07:00}"
       CRAFT_MIN_AGE_HOURS: "${CRAFT_MIN_AGE_HOURS:-24}"
-      CRAFT_APPS: "${CRAFT_APPS:-pdfcraft photocraft vectorcraft designcraft}"
+      CRAFT_APPS: "${CRAFT_APPS:-pdfcraft photocraft vectorcraft designcraft wordcraft gridcraft deckcraft cadcraft lightcraft filmcraft effectcraft}"
       CRAFT_LANGUAGE: "${CRAFT_LANGUAGE:-en}"
       CRAFT_LINK_URL: "${CRAFT_LINK_URL:-}"
       CRAFT_LINK_LABEL: "${CRAFT_LINK_LABEL:-Nextcloud}"
@@ -915,6 +977,7 @@ services:
       CRAFTSUITE_LAYER_SHA256: "${CRAFTSUITE_LAYER_SHA256:-}"
       CRAFTSUITE_LAYER_REPO: "${CRAFTSUITE_LAYER_REPO:-hozwei/nextcloud-craftsuite-layer}"
       CRAFTSUITE_CANARY: "${CRAFTSUITE_CANARY:-on}"
+      CRAFTSUITE_STARTUP_TIMEOUTS: "${CRAFTSUITE_STARTUP_TIMEOUTS-lightcraft=180000 effectcraft=180000}"
     volumes:
       - "${CRAFT_DATA_DIR:-./data}:/craft"
     read_only: true

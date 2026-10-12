@@ -67,7 +67,7 @@ anywhere.
 
 Requirements: Nextcloud 34 or 35, the apps on a host name of their own under the same
 registrable domain as Nextcloud (`craft.example.com` next to `cloud.example.com`), and the same
-release of nextcloud-craftsuite-layer on both sides. This page uses 0.1.0.
+release of nextcloud-craftsuite-layer on both sides. This page uses 0.2.0.
 
 ### On the apps' side
 
@@ -75,8 +75,8 @@ In `.env`:
 
 ```sh
 CRAFTSUITE_ALLOWED_ORIGINS=https://cloud.example.com
-CRAFTSUITE_LAYER_VERSION=0.1.0
-CRAFTSUITE_LAYER_SHA256=8aafbc59cee7a3bad95b0ab03be6c7dce23f0be178e461142266246988639017
+CRAFTSUITE_LAYER_VERSION=0.2.0
+CRAFTSUITE_LAYER_SHA256=3325b93797dfcfda4fbeda9ce127f1f03f0a3d3d62df621b22019e175e3e4b9b
 ```
 
 `CRAFTSUITE_ALLOWED_ORIGINS` is your Nextcloud's address exactly as the browser shows it, without
@@ -104,8 +104,8 @@ versions being served.
 
    ```sh
    cd "$(mktemp -d)"
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.1.0/craftsuite_layer-0.1.0.tar.gz
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.1.0/SHA256SUMS
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.2.0/craftsuite_layer-0.2.0.tar.gz
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.2.0/SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS
    ```
 
@@ -114,7 +114,7 @@ versions being served.
    official image), and enable it:
 
    ```sh
-   tar -xzf craftsuite_layer-0.1.0.tar.gz -C /path/to/nextcloud/custom_apps
+   tar -xzf craftsuite_layer-0.2.0.tar.gz -C /path/to/nextcloud/custom_apps
    chown -R 33:33 /path/to/nextcloud/custom_apps/craftsuite_layer
    occ app:enable craftsuite_layer
    ```
@@ -122,13 +122,21 @@ versions being served.
    To offer it only to the group that may use the apps, enable it with
    `occ app:enable -g craft craftsuite_layer` instead; check with
    `occ config:app:get craftsuite_layer enabled` (expect `["craft"]`).
-3. Set the addresses of the apps, with the slash at the end:
+3. Set the addresses of the apps you serve, with the slash at the end; the app refuses an address
+   with a query (`?…`). An app without an address has no entry in Files:
 
    ```sh
    occ config:app:set craftsuite_layer pdfcraft_url --value=https://craft.example.com/pdfcraft/
    occ config:app:set craftsuite_layer photocraft_url --value=https://craft.example.com/photocraft/
    occ config:app:set craftsuite_layer vectorcraft_url --value=https://craft.example.com/vectorcraft/
    occ config:app:set craftsuite_layer designcraft_url --value=https://craft.example.com/designcraft/
+   occ config:app:set craftsuite_layer wordcraft_url --value=https://craft.example.com/wordcraft/
+   occ config:app:set craftsuite_layer gridcraft_url --value=https://craft.example.com/gridcraft/
+   occ config:app:set craftsuite_layer deckcraft_url --value=https://craft.example.com/deckcraft/
+   occ config:app:set craftsuite_layer cadcraft_url --value=https://craft.example.com/cadcraft/
+   occ config:app:set craftsuite_layer lightcraft_url --value=https://craft.example.com/lightcraft/
+   occ config:app:set craftsuite_layer filmcraft_url --value=https://craft.example.com/filmcraft/
+   occ config:app:set craftsuite_layer effectcraft_url --value=https://craft.example.com/effectcraft/
    occ config:list craftsuite_layer
    ```
 
@@ -137,7 +145,14 @@ versions being served.
    one of Nextcloud's `trusted_domains`: remove it there.
 
 In Files, a PDF now has "Open in PdfCraft" in its menu; PSD and IDML files open in PhotoCraft and
-DesignCraft with a click. The layer's [Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.1.0/docs/nextcloud-app.md)
+DesignCraft with a click, `.deckcraft` in DeckCraft, camera raw files (`.dng`, `.cr3`, `.nef`, …)
+in LightCraft, `.fcproj` in FilmCraft, `.ecproj` in EffectCraft, and `.dxf` in CADCraft (in
+VectorCraft if CADCraft has no address). Office files (`.docx`, `.xlsx`, `.pptx`, …) have
+WordCraft, GridCraft and DeckCraft in their menu only, so a click on them stays with Nextcloud
+Office or ONLYOFFICE where one is installed; JPEG, PNG, TIFF and WebP pictures have LightCraft in
+their menu only. FilmCraft and EffectCraft open and save their project files only: the media a
+project uses are not in the file and are missing when it is opened from Nextcloud. The layer's
+[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.2.0/docs/nextcloud-app.md)
 lists every file type, the editor page's messages and what happens on save.
 
 ### Nextcloud's own headers

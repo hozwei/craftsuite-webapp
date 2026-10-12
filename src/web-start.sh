@@ -26,8 +26,11 @@ http {
   types {
     application/javascript mjs;
     font/ttf ttf;
+    font/otf otf;
+    application/manifest+json webmanifest;
   }
   default_type application/octet-stream;
+  charset utf-8;
   client_body_temp_path /tmp/client_temp;
   proxy_temp_path /tmp/proxy_temp;
   fastcgi_temp_path /tmp/fastcgi_temp;
@@ -43,13 +46,15 @@ http {
   gzip_vary on;
   gzip_proxied any;
   gzip_comp_level 5;
-  gzip_types text/css text/plain application/javascript application/json application/wasm image/svg+xml font/ttf;
+  gzip_types text/css text/plain application/javascript application/json application/manifest+json application/wasm image/svg+xml font/ttf font/otf;
 
+  # A year only for names with Trunk's content hash (app-web-9fbc20856b2df0f8_bg.wasm, up to 16
+  # hex digits); names that stay the same across releases (worker.js, sw.js, ...) revalidate.
   map "$status:$uri" $craft_cache_control {
     default "no-cache";
     ~^\d+:/oauth2/ "";
     ~^\d+:/[^/]+/craftsuite-layer/ "no-cache";
-    ~^(?:200|206|304):.*\.(?:js|mjs|wasm)$ "private, max-age=31536000, immutable";
+    "~^(?:200|206|304):.*-[0-9a-f]{8,16}(?:_bg)?\.(?:js|mjs|wasm)$" "private, max-age=31536000, immutable";
   }
 
   map $request_uri $craft_return_to {

@@ -16,7 +16,14 @@ pdfcraft: 0.6.0 (previous 0.5.0, blocked -, Nextcloud yes)
 photocraft: 0.7.0 (previous 0.6.0, blocked -, Nextcloud yes)
 vectorcraft: 0.9.0 (previous 0.8.0, blocked -, Nextcloud yes)
 designcraft: 0.6.0 (previous 0.5.0, blocked -, Nextcloud yes)
-layer: 0.1.0
+wordcraft: 0.5.0 (previous -, blocked -, Nextcloud yes)
+gridcraft: 0.5.0 (previous -, blocked -, Nextcloud yes)
+deckcraft: 0.5.0 (previous -, blocked -, Nextcloud yes)
+cadcraft: 0.5.0 (previous -, blocked -, Nextcloud yes)
+lightcraft: 0.6.0 (previous 0.5.0, blocked -, Nextcloud yes)
+filmcraft: 0.6.0 (previous -, blocked -, Nextcloud yes)
+effectcraft: 0.8.0 (previous 0.7.0, blocked -, Nextcloud yes)
+layer: 0.2.0
 OK 2026-10-12 07:00:41
 ```
 
@@ -72,6 +79,18 @@ docker exec craft-update sh -c 'echo 0.7.0 > /craft/state/pdfcraft.blocked'
 
 That version and every lower one are skipped; the next higher release is taken as usual.
 
+## Adding apps
+
+Add the app to `CRAFT_APPS` in `.env` (empty or missing: all eleven) and run
+`docker compose up -d`. The run that follows installs, for each new app, the highest release that
+qualifies: old enough by `CRAFT_MIN_AGE_HOURS` and, with the canary check, tested. If the newest
+release is younger than `CRAFT_MIN_AGE_HOURS`, the app starts with an older one, possibly older
+than the release the layer's adapters were checked against; the newest follows on a later run (or
+[update now](#update-now)). While a canary issue is open or a canary failure holds new releases
+([the canary hold](#the-canary-hold)), a new app is not installed, and each run reports it as an
+error. With the Nextcloud integration on, also set the app's address in Nextcloud
+([nextcloud.md](nextcloud.md#on-nextclouds-side), step 3).
+
 ## The canary hold
 
 When the layer's canary has failed since your layer version came into use, `--status` shows
@@ -102,12 +121,12 @@ release's changelog first.
    [configuration.md](configuration.md#nextcloud-integration)) and set both values in `.env`:
 
    ```sh
-   CRAFTSUITE_LAYER_VERSION=0.2.0
-   CRAFTSUITE_LAYER_SHA256=<sha256 of craftsuite-layer-hosting-0.2.0.tar.gz>
+   CRAFTSUITE_LAYER_VERSION=<version>
+   CRAFTSUITE_LAYER_SHA256=<sha256 of craftsuite-layer-hosting-<version>.tar.gz>
    ```
 
-2. Apply it. The updater starts, downloads and checks the bundle, and updates the translator in
-   the versions being served; when its run has finished, check:
+2. Apply it. The updater starts, downloads and checks the bundle, and adds or updates the
+   translator in the versions being served; when its run has finished, check:
 
    ```sh
    docker compose up -d
@@ -115,8 +134,8 @@ release's changelog first.
    docker exec craft-update craft-update --status
    ```
 
-3. Replace the Nextcloud app: download and check `craftsuite_layer-<version>.tar.gz` as in
-   [nextcloud.md](nextcloud.md#on-nextclouds-side), delete the folder
+3. Back up Nextcloud, then replace its app: download and check `craftsuite_layer-<version>.tar.gz`
+   as in [nextcloud.md](nextcloud.md#on-nextclouds-side), delete the folder
    `custom_apps/craftsuite_layer`, unpack the new one, set its owner, then:
 
    ```sh
@@ -124,10 +143,19 @@ release's changelog first.
    occ app:list | grep craftsuite_layer
    ```
 
-   The addresses of the apps stay. Do steps 2 and 3 close together.
+   The addresses of the apps stay, and so does a group restriction set with `app:enable -g`
+   (`occ config:app:get craftsuite_layer enabled`); a plain `occ app:enable craftsuite_layer`
+   would lift it. If the new release supports more apps, set their addresses
+   ([nextcloud.md](nextcloud.md#on-nextclouds-side), step 3). Do steps 2 and 3 close together.
 
-To go back, set the previous version and checksum again and put the previous Nextcloud app back
-the same way.
+To go back, set the previous version and checksum again. For the Nextcloud app, the way back is
+the backup from step 3: the layer's documentation does not cover installing an older app over a
+newer one. Back at 0.1.0, PdfCraft, PhotoCraft, VectorCraft and DesignCraft get its translator
+again; the seven newer apps are served without the Nextcloud integration, since 0.1.0 has no
+adapter for them (`--status` shows `Nextcloud no`). No startup timeout is passed, since its
+`inject-translator.sh` has no such option; `CRAFTSUITE_STARTUP_TIMEOUTS` can stay as it is.
+EffectCraft keeps the layer's self-removing `sw.js` (it works, but not offline) until its next
+release.
 
 Before a Nextcloud major upgrade, install a layer release whose app supports the new version
 first: the Nextcloud updater disables apps that do not declare it.
@@ -144,8 +172,10 @@ next release; it does nothing, since no site may frame them. To remove it at onc
 version that was in use (`docker exec craft-update ls /craft/layer`):
 
 ```sh
-docker exec craft-update sh -c 'for a in pdfcraft photocraft vectorcraft designcraft; do sh /craft/layer/craftsuite-layer-hosting-0.1.0/hosting/inject-translator.sh -q --remove --app "$a" "/craft/www/$a"; done'
+docker exec craft-update sh -c 'for a in $CRAFT_APPS; do sh /craft/layer/craftsuite-layer-hosting-0.2.0/hosting/inject-translator.sh -q --remove --app "$a" "/craft/www/$a"; done'
 ```
+
+With 0.2.0 this also puts EffectCraft's own service worker back.
 
 ## Changing the Nextcloud address
 
@@ -174,9 +204,10 @@ diff .env.example .env
 docker compose up -d --build
 ```
 
-Add any new settings from `.env.example` to `.env` before `up`. To go back, check out the previous
-tag and run `docker compose up -d --build` again. On TrueNAS, render the new `compose.yaml` and
-paste it ([truenas.md](truenas.md#changing-settings)).
+Add any new settings from `.env.example` to `.env` before `up`. A `CRAFT_APPS` in `.env` keeps
+the apps it names when a release supports more ([adding apps](#adding-apps)). To go back, check
+out the previous tag and run `docker compose up -d --build` again. On TrueNAS, render the new
+`compose.yaml` and paste it ([truenas.md](truenas.md#changing-settings)).
 
 ## Updating the containers
 

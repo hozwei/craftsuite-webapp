@@ -59,9 +59,10 @@ CRAFT_DATA_DIR/
     craftsuite-layer-hosting-<version>/        the pinned layer bundle (hosting/, translators/)
 ```
 
-Everything in it can be rebuilt by the updater; there are no user files. Plan about 450 MB: one
-set of the four apps takes about 215 MB with its compressed copies, and the previous version of
-each app stays.
+Everything in it can be rebuilt by the updater; there are no user files. Plan about 1.5 GB: one
+set of the eleven apps takes about 576 MB with its compressed copies, the previous version of
+each app stays (about 1.2 GB together), and an update unpacks a release under
+`www/releases/.tmp-*` first (for LightCraft the 102 MB zip and 203 MB unpacked).
 
 ## The update run
 
@@ -86,28 +87,45 @@ For each app in `CRAFT_APPS`:
    must lie inside `<app>-web-<version>/`, without links and without `..`; after unpacking there
    must be nothing but files and folders, an `index.html` and at least one `.wasm`.
 5. **Prepare.** The upstream hosting notes (`README.md`, `HOSTING.md`, `_headers`, `.htaccess`)
-   are removed (the headers they describe are set by `craft-web`). The app icon is fetched from
-   the app's repository at the same tag for the start page (cosmetic: without it the start page
-   shows a letter tile). Apart from this and the translator, the release is served unchanged; its
-   licence and notice files stay.
+   are removed (`craft-web` sets its own headers). If the release has the leftovers of a Cargo
+   build at its root (`.fingerprint/` or `.cargo-lock`; LightCraft's has `build/`, `deps/` and
+   more), `build/`, `deps/`, `examples/`, `incremental/`, `.fingerprint/` and `.cargo-*lock` are
+   removed: the page never loads them. Brotli copies (`*.br`) go too; nginx serves only the `.gz`
+   copies. The app icon is fetched from the app's repository at the same tag for the start page
+   (cosmetic: without it the start page shows a letter tile). Apart from this, the translator and
+   the service worker (step 6), the release is served unchanged; its licence and notice files
+   stay.
 6. **Add the translator** (Nextcloud integration on): `inject-translator.sh` of the pinned layer
    adds two `<script>` tags after `<head>` and copies the translator files into
-   `craftsuite-layer/`. Exit code 0: go on. Exit code 6 (the layer has no adapter for this app): go
-   on without the translator. Any other code: **stop**; the release is not switched to and the
-   installed version keeps running.
-7. **Compress** `.html`, `.js`, `.mjs` and `.wasm` with `gzip -9` into `.gz` copies, which nginx
-   serves directly (`gzip_static`).
+   `craftsuite-layer/`. For an app in `CRAFTSUITE_STARTUP_TIMEOUTS` (by default LightCraft and
+   EffectCraft, 180000 ms each) the updater passes `--startup-timeout` on every call, and the
+   translator waits that long for the app to start instead of 60 s: these apps load their large
+   `.wasm` while that timer runs, and 60 s is too short below about 3 Mbit/s (LightCraft) and 2.4
+   Mbit/s (EffectCraft) ([configuration.md](configuration.md#nextcloud-integration)). Layer 0.1.0 has no such option
+   and gets none. The script of layer 0.2.0 also replaces a service worker at the build's root,
+   `sw.js` (EffectCraft's), with one that serves nothing, deletes the app's caches and
+   unregisters itself; the original stays as `craftsuite-layer/sw.js.orig`. With the apps and
+   Nextcloud on the same site, a worker registered by a direct visit would also control the apps
+   in the Nextcloud frame and answer with an old `index.html` and translator. Exit code 0: go
+   on. Exit code 6 (the layer has no adapter for this app): go on without the translator. Any
+   other code: **stop**; the release is not switched to and the installed version keeps running.
+7. **Compress** `.html`, `.js`, `.mjs`, `.wasm` and `.otf` with `gzip -9` into `.gz` copies,
+   which nginx serves directly (`gzip_static`). This comes after the translator, so the copies of
+   `index.html` and of EffectCraft's `sw.js` hold the changed files; copies a release ships itself
+   (LightCraft's) are overwritten.
 8. **Switch** by replacing the symbolic link `www/<app>` in one atomic rename. Browsers get the new
    version on their next page load. The previous version is kept; older ones are deleted.
 9. **Keep the served version current.** After that, the translator of the version being served is
-   checked (`inject-translator.sh --check`) and updated in place if the layer version or
-   `CRAFTSUITE_ALLOWED_ORIGINS` changed. This is how a new layer release reaches the apps without
-   a new app release.
+   checked (`inject-translator.sh --check`, with the app's startup timeout) and updated in place if
+   the layer version, `CRAFTSUITE_ALLOWED_ORIGINS` or the app's startup timeout changed, or if
+   `sw.js` is the app's own again. This is how a new layer release reaches the apps without a new
+   app release.
 
 Afterwards the run writes `state/status` and the start page. Any error makes the status
 `ERROR <count>`: the start page shows a red notice, `craft-update` turns unhealthy, the apps keep
 running in their previous version, and the updater tries again an hour later (up to three times,
-then at the next daily time). A run takes five API requests: one per app and one for the canary.
+then at the next daily time). A run takes one API request per app and one for the canary issues
+(only with the Nextcloud integration and the canary check on): twelve with the eleven apps.
 Machines behind the same public IP address share the limit of 60 per hour.
 
 ### The layer bundle
@@ -150,12 +168,19 @@ three rules:
    `state/canary-since` ([operations.md](operations.md#the-canary-hold)); failures count again from
    that moment.
 
+The hold is global: the updater does not look at which app an issue is about, so a failure of any
+app, also of one that is not in `CRAFT_APPS`, holds the new releases of all apps. Only the label
+`canary` counts; the layer's issues labelled `canary-ui` or `canary-nextcloud` hold nothing.
+
 Limits: the check relies on the canary running on schedule. GitHub can delay scheduled runs and
-turns schedules off after 60 days without activity in a repository; without runs there are no
-issues, and releases are then taken as if they had passed. A new or rebuilt data folder knows no
-earlier failures: failures count from its first run. GitHub keeps no earlier close time when an
-issue is reopened, so a reopened canary issue counts as open from its creation to its last close.
-Watch the layer's repository ([operations.md](operations.md#staying-informed)).
+turns schedules off after 60 days without activity in a public repository; no run means no issue,
+and releases are then taken as if they had passed. The canary decides with Chromium only: the
+layer runs the apps' WebKit tests without letting them decide and runs no app in Firefox, so a
+release that breaks the translator only in Safari (also on the iPad) or Firefox opens no `canary`
+issue. A new or rebuilt data folder knows no earlier failures: failures count from its first run.
+GitHub keeps no earlier close time when an issue is reopened, so a reopened canary issue counts as
+open from its creation to its last close. Watch the layer's repository
+([operations.md](operations.md#staying-informed)).
 
 ## Headers
 
@@ -166,11 +191,13 @@ nginx's own error pages:
 |---|---|---|
 | `Content-Security-Policy` | `frame-ancestors <CRAFTSUITE_ALLOWED_ORIGINS>`, or `frame-ancestors 'none'` when that is empty | Only your Nextcloud may frame the apps and the sign-in pages; no other site may (with an empty list: nobody). |
 | `X-Content-Type-Options` | `nosniff` | As the upstream builds ask for. |
-| `Cache-Control` | `private, max-age=31536000, immutable` for successful answers (200, 206, 304) for `.js`, `.mjs` and `.wasm`, whose names carry a content hash; `no-cache` for everything else, including error answers, `index.html` and the translator files in `craftsuite-layer/`; oauth2-proxy's own value under `/oauth2/` | New releases and translator updates take effect on the next load; no shared cache keeps anything; an error is never cached. |
+| `Cache-Control` | `private, max-age=31536000, immutable` for successful answers (200, 206, 304) for `.js`, `.mjs` and `.wasm` files whose names carry Trunk's content hash (a `-` and 8 to 16 hex digits, as in `wordcraft-web-d288edabbaf506a2.js` and `wordcraft-web-d288edabbaf506a2_bg.wasm`); `no-cache` for everything else, including error answers, `index.html`, the translator files in `craftsuite-layer/` and the files that keep their name from one release to the next (such as FilmCraft's, LightCraft's and EffectCraft's `.js` and `.wasm`, and EffectCraft's `sw.js`); oauth2-proxy's own value under `/oauth2/` | New releases and translator updates take effect on the next load; the address `/<app>/` stays the same across releases, so a file without a hash in its name is checked on every load instead of being kept for a year next to a new `index.html`; no shared cache keeps anything; an error is never cached. |
 
 `X-Frame-Options` is never sent: it cannot allow another origin and would block Nextcloud. No
 `Cross-Origin-Opener-Policy` or `-Embedder-Policy` either; the apps do not need them. `.wasm` is
-served as `application/wasm`, so browsers compile it while downloading.
+served as `application/wasm`, so browsers compile it while downloading. `.otf` is served as
+`font/otf` (LightCraft's font) and `.webmanifest` as `application/manifest+json` (EffectCraft's),
+both compressed; HTML, plain text and JavaScript are sent with `; charset=utf-8`.
 
 ## Security model
 

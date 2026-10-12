@@ -9,10 +9,11 @@ docker compose up -d
 
 `.env` holds two secrets: keep it readable for you only (`chmod 600 .env`) and out of version
 control (it is in `.gitignore`). Values are plain text; put a value in single quotes if it
-contains `$`, `#`, a backslash or spaces.
+contains `$`, `#` or a backslash (spaces between words need no quotes).
 
-The *Default* columns give the value `compose.yaml` uses when a setting is missing or empty;
-`.env.example` fills in example values for some of them.
+The *Default* columns give the value `compose.yaml` uses when a setting is missing or empty
+(`CRAFTSUITE_STARTUP_TIMEOUTS`: only when it is missing); `.env.example` fills in example values
+for some of them.
 
 ## Where the apps are served
 
@@ -51,7 +52,7 @@ of 12 hours costs little.
 |---|---|---|
 | `CRAFT_UPDATE_TIME` | `07:00` | Daily update time (`HH:MM`, in `TZ`; anything else is replaced by `07:00`, with a line in the log). The updater also runs when its container starts, and an hour after a failed run (up to three times). Choose a time after your backups. |
 | `CRAFT_MIN_AGE_HOURS` | `24` | A release is taken only when it is at least this many hours old, so that bad releases can be withdrawn first. With the canary check on, the first run of the layer's canary after a release must also have reported no failure ([how-it-works.md](how-it-works.md#the-canary), including its limits). `0` takes the newest qualifying release at once (for one manual run, see [operations.md](operations.md#update-now)). |
-| `CRAFT_APPS` | `pdfcraft photocraft vectorcraft designcraft` | The apps to serve, separated by spaces. Each must publish `<app>-web-<version>.zip` in its releases at `github.com/storytold/<app>`. Removing one stops its updates and drops it from the start page, but it stays reachable at `/<app>/` until you delete it: `docker exec craft-update sh -c 'rm -rf /craft/www/<app> /craft/www/releases/<app>-* /craft/state/<app>.*'`. |
+| `CRAFT_APPS` | `pdfcraft photocraft vectorcraft designcraft wordcraft gridcraft deckcraft cadcraft lightcraft filmcraft effectcraft` | The apps to serve, separated by spaces. Each must publish `<app>-web-<version>.zip` in its releases at `github.com/storytold/<app>`. Removing one stops its updates and drops it from the start page, but it stays reachable at `/<app>/` until you delete it: `docker exec craft-update sh -c 'rm -rf /craft/www/<app> /craft/www/releases/<app>-* /craft/state/<app>.*'`. |
 
 ## Start page
 
@@ -73,17 +74,18 @@ All three of the first settings are needed for the integration; see
 | Setting | Default | Meaning |
 |---|---|---|
 | `CRAFTSUITE_ALLOWED_ORIGINS` | empty | The origins of the Nextcloud servers that may frame the apps, separated by spaces: `https://host` or `https://host:port`, exactly as the browser shows them, without a path or a slash at the end. It goes into the `frame-ancestors` header and into the translator; `craft-web` refuses to start with anything else. Empty: no site may frame the apps (`frame-ancestors 'none'`). |
-| `CRAFTSUITE_LAYER_VERSION` | empty | The release of [nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer) whose translator the updater adds, such as `0.1.0`. Empty: the apps are served without the translator. Use the same version as the Nextcloud app. |
+| `CRAFTSUITE_LAYER_VERSION` | empty | The release of [nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer) whose translator the updater adds, such as `0.2.0`. Empty: the apps are served without the translator. Use the same version as the Nextcloud app. |
 | `CRAFTSUITE_LAYER_SHA256` | empty | The SHA-256 of that release's `craftsuite-layer-hosting-<version>.tar.gz`, from its `SHA256SUMS` file. The updater refuses a bundle with another checksum. |
 | `CRAFTSUITE_LAYER_REPO` | `hozwei/nextcloud-craftsuite-layer` | Where the bundle and the canary issues come from (`owner/repository` on GitHub), for a fork. |
 | `CRAFTSUITE_CANARY` | `on` | `off`: take app releases without looking at the layer's canary (no waiting for open issues, no canary hold). |
+| `CRAFTSUITE_STARTUP_TIMEOUTS` | `lightcraft=180000 effectcraft=180000` | How long the translator waits for an app to start, counted from the page's `load` event: entries `<app>=<milliseconds>` (1 to 2147483647), separated by spaces. Apps not listed get the translator's default of 60 seconds. LightCraft and EffectCraft download their `.wasm` (LightCraft also a font) while this time runs; 60 seconds are too short below about 3 Mbit/s for LightCraft (about 24 MB with gzip) and about 2.4 Mbit/s for EffectCraft (about 18 MB). FilmCraft fits into 60 seconds down to about 2 Mbit/s: add `filmcraft=180000` for users on slow connections. Set but empty: every app gets the default. A changed value reaches the served versions on the next run. An invalid entry is an error of the run (`layer: ERROR - CRAFTSUITE_STARTUP_TIMEOUTS takes entries …`), and new releases wait. With layer 0.1.0 no timeout is passed (the value is still checked). |
 
-For nextcloud-craftsuite-layer 0.1.0 the checksum is
-`8aafbc59cee7a3bad95b0ab03be6c7dce23f0be178e461142266246988639017`. For another release, take it
+For nextcloud-craftsuite-layer 0.2.0 the checksum is
+`3325b93797dfcfda4fbeda9ce127f1f03f0a3d3d62df621b22019e175e3e4b9b`. For another release, take it
 from that release's `SHA256SUMS`:
 
 ```sh
-curl -fsSL https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.1.0/SHA256SUMS
+curl -fsSL https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.2.0/SHA256SUMS
 ```
 
 ## Fixed settings

@@ -30,9 +30,10 @@ concerned ([operations.md](operations.md#status-and-logs)).
 | `ERROR - cannot read the canary issues …` | The GitHub API did not answer. New releases wait; the updater tries again in an hour. |
 | `layer: ERROR - checksum of craftsuite-layer-hosting-… does not match …` | `CRAFTSUITE_LAYER_SHA256` is not the checksum of that version's bundle. Copy it again from the release's `SHA256SUMS`. New releases wait until it is fixed. |
 | `layer: ERROR - CRAFTSUITE_ALLOWED_ORIGINS is empty` | The layer is on but no Nextcloud origin is set. Set it, or empty `CRAFTSUITE_LAYER_VERSION`. |
+| `layer: ERROR - CRAFTSUITE_STARTUP_TIMEOUTS takes entries such as lightcraft=180000 …` | The value is not a list of `app=milliseconds` entries separated by spaces, or a value is above 2147483647. Until it is fixed, the layer counts as not available: new releases wait, and every run has an error. |
 | `inject-translator: error: invalid allowed origin …` and `translator not added to … (inject-translator.sh exit code 2)` | The translator refuses a value in `CRAFTSUITE_ALLOWED_ORIGINS` (https only, no path, international names in their `xn--` form). Until it is fixed, no release is switched to; on a first installation no app appears. |
 | `translator not added to … (inject-translator.sh exit code 4)` | The release's `index.html` changed in a way the translator's injector does not handle. That release is not switched to; the layer needs an update. |
-| `layer … has no adapter for <app>, … served without the Nextcloud integration` | This layer version does not support that app. It is served without the translator. |
+| `layer … has no adapter for <app>, … served without the Nextcloud integration` | This layer version does not support that app. It is served without the translator, and `--status` shows `Nextcloud no` for it. Layer 0.1.0 has none for WordCraft, GridCraft, DeckCraft, CADCraft, LightCraft, FilmCraft and EffectCraft; 0.2.0 has one for all eleven apps ([operations.md](operations.md#upgrading-nextcloud-craftsuite-layer)). |
 | Every page answers `403` | `CRAFT_DATA_DIR` is not readable for others; `craft-web` reads it as user 101: `chmod 755 <CRAFT_DATA_DIR>`. |
 | `ERROR - <folder> … must be writable for user …` | `CRAFT_DATA_DIR` or a folder in it does not belong to `CRAFT_USER`: `chown -R <CRAFT_USER> <CRAFT_DATA_DIR>`. |
 | `craft-update is already running` | Another run is in progress (a manual one, or the retry an hour after an error). If none is, the lock is left from a killed run: restarting the container removes it. |
@@ -42,18 +43,19 @@ concerned ([operations.md](operations.md#status-and-logs)).
 
 | Symptom | Cause and fix |
 |---|---|
-| No "Open in …" entries in Files | The app is not enabled for you (`occ app:list`, `occ config:app:get craftsuite_layer enabled`), or no address is set for that app (`occ config:list craftsuite_layer`), or the address is refused: see *Administration settings* → *Craft apps*. |
+| No "Open in …" entries in Files | The app is not enabled for you (`occ app:list`, `occ config:app:get craftsuite_layer enabled`), or no address is set for that app (`occ config:list craftsuite_layer`), or the address is refused (since 0.2.0 also one with a query, `?…`): see *Administration settings* → *Craft apps*. |
 | The editor shows after 15 seconds "… has not answered yet" | The frame shows a sign-in (follow the link in the hint, sign in, reload), or the app may not be framed: `CRAFTSUITE_ALLOWED_ORIGINS` must contain your Nextcloud's address exactly as the browser shows it, and `--status` must show `Nextcloud yes`. Check the headers with `curl -sI https://craft.example.com/` (`frame-ancestors` with your Nextcloud, no `x-frame-options`). |
-| "… did not start. Is it reachable at …?" after 90 seconds | The app does not load in the frame at all; same checks as above, and the browser console of the frame. |
+| "… did not start. Is it reachable at …?" after 90 seconds | The app does not load in the frame at all; same checks as above, and the browser console of the frame. LightCraft and EffectCraft on a slow first load (below about 2 Mbit/s) get this message too: the editor page waits a fixed 90 seconds, which `CRAFTSUITE_STARTUP_TIMEOUTS` does not change. Then it is provisional, and the file opens once the app has started. |
+| "… could not start: the app did not start in time" while LightCraft, EffectCraft or FilmCraft load for the first time | Their large downloads do not hold back the page's `load` event, so the translator's start timer runs while they are still loading: by default 180 seconds for LightCraft and EffectCraft (`CRAFTSUITE_STARTUP_TIMEOUTS`), the translator's 60 seconds for FilmCraft. The message is provisional: once the app has started, it gets the file after all. For slow connections, raise the values or add `filmcraft=180000` ([configuration.md](configuration.md#nextcloud-integration)) and run `docker compose up -d`; the run that follows updates the served versions. |
 | "… could not start: the app registered no drop target" / "failed to start" | The browser lacks WebGL 2 or the app failed to start; try the app directly at `https://craft.example.com/<app>/`. |
 
 The editor page's messages are explained in the layer's
-[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.1.0/docs/nextcloud-app.md).
+[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.2.0/docs/nextcloud-app.md).
 
 ## The apps
 
 | Symptom | Cause and fix |
 |---|---|
-| An app stays on its loading screen | Reload. If it stays, add `?webgl` to the address (forces WebGL 2); `?cpu` is the slowest, most compatible fallback. Both work in all four apps. |
+| An app stays on its loading screen | Reload. If it stays, open the app directly with `?webgl` at the end of its address (forces WebGL 2; read by PhotoCraft, VectorCraft, DesignCraft, WordCraft, GridCraft, DeckCraft, CADCraft and FilmCraft) or `?cpu` (PhotoCraft and FilmCraft only). PdfCraft, LightCraft and EffectCraft read neither. Not in Nextcloud: the Nextcloud app refuses app addresses with a query. |
 | The start page shows a red notice | The last update run had an error; the apps run in their previous version. See the log of `craft-update`. |
-| A new version does not appear | Browsers load it on the next page load; the update runs daily at `CRAFT_UPDATE_TIME` and takes a release only when it qualifies (age, canary). |
+| A new version does not appear | Browsers load it on the next page load; the update runs daily at `CRAFT_UPDATE_TIME` and takes a release only when it qualifies (age, canary). EffectCraft, in a browser that opened it directly while it was served with its own service worker (without the integration or with layer 0.1.0): the first load after the layer has replaced the worker still comes from that worker's cache, every later one from the server. |
