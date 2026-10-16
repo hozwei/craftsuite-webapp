@@ -67,7 +67,7 @@ anywhere.
 
 Requirements: Nextcloud 34 or 35, the apps on a host name of their own under the same
 registrable domain as Nextcloud (`craft.example.com` next to `cloud.example.com`), and the same
-release of nextcloud-craftsuite-layer on both sides. This page uses 0.4.0.
+release of nextcloud-craftsuite-layer on both sides. This page uses 0.4.2.
 
 ### On the apps' side
 
@@ -75,8 +75,8 @@ In `.env`:
 
 ```sh
 CRAFTSUITE_ALLOWED_ORIGINS=https://cloud.example.com
-CRAFTSUITE_LAYER_VERSION=0.4.0
-CRAFTSUITE_LAYER_SHA256=2d0e8e3c795193d800b8316b28db545e5be24e0ab45e8423114adfd38bc2be1d
+CRAFTSUITE_LAYER_VERSION=0.4.2
+CRAFTSUITE_LAYER_SHA256=0e71509f5332ab11f09f49ddf1ec896f502f08b315abccc699d5fa6492f23ede
 ```
 
 `CRAFTSUITE_ALLOWED_ORIGINS` is your Nextcloud's address exactly as the browser shows it, without
@@ -104,8 +104,8 @@ versions being served.
 
    ```sh
    cd "$(mktemp -d)"
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.0/craftsuite_layer-0.4.0.tar.gz
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.0/SHA256SUMS
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.2/craftsuite_layer-0.4.2.tar.gz
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.2/SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS
    ```
 
@@ -114,7 +114,7 @@ versions being served.
    official image), and enable it:
 
    ```sh
-   tar -xzf craftsuite_layer-0.4.0.tar.gz -C /path/to/nextcloud/custom_apps
+   tar -xzf craftsuite_layer-0.4.2.tar.gz -C /path/to/nextcloud/custom_apps
    chown -R 33:33 /path/to/nextcloud/custom_apps/craftsuite_layer
    occ app:enable craftsuite_layer
    ```
@@ -153,13 +153,13 @@ Office, ONLYOFFICE or Euro-Office where one is installed; JPEG, PNG, TIFF and We
 PhotoCraft and LightCraft in their menu only. A Craft app made the default app (below) takes the
 click on all its types. FilmCraft and EffectCraft open and save their project files only: the
 media a project uses are not in the file and are missing when it is opened from Nextcloud. The
-layer's [Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.0/docs/nextcloud-app.md)
+layer's [Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/docs/nextcloud-app.md)
 lists every file type, the editor page's messages and what happens on save.
 
 What the Nextcloud app 0.3.0 and 0.4.0 added, in short; the settings and their limits are in the
 layer's documentation, under
-[Configuring](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.0/docs/nextcloud-app.md#configuring)
-and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.0/docs/nextcloud-app.md#files):
+[Configuring](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/docs/nextcloud-app.md#configuring)
+and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/docs/nextcloud-app.md#files):
 
 - **Entries only for the enabled groups.** Enabled with `-g` (step 2), the app shows its entries
   in Files only to the members of those groups; before 0.3.0, everybody saw them.

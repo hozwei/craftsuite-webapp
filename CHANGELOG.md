@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+- The documentation and `.env.example` use nextcloud-craftsuite-layer 0.4.2 instead of 0.4.0:
+  `CRAFTSUITE_LAYER_VERSION=0.4.2` with the checksum of its hosting bundle, the download of the
+  Nextcloud app and the links to the layer's documentation. Its translators handle the Craft
+  releases of 2026-10-14 (0.4.1 handled those of 2026-10-12, 0.4.0 the earlier ones); its
+  Nextcloud app only has a new version number. `compose.yaml` is unchanged.
+
 ## [0.3.0] - 2026-10-12
 
 Canary runs instead of a fixed schedule, and nextcloud-craftsuite-layer 0.4.0.

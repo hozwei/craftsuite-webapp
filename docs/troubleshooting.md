@@ -52,7 +52,7 @@ concerned ([operations.md](operations.md#status-and-logs)).
 | "… could not start: the app registered no drop target" / "failed to start" | The browser lacks WebGL 2 or the app failed to start; try the app directly at `https://craft.example.com/<app>/`. |
 
 The editor page's messages are explained in the layer's
-[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.0/docs/nextcloud-app.md).
+[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/docs/nextcloud-app.md).
 
 ## The apps
 
