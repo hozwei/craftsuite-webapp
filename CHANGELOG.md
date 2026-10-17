@@ -2,11 +2,82 @@
 
 ## [Unreleased]
 
-- The documentation and `.env.example` use nextcloud-craftsuite-layer 0.4.2 instead of 0.4.0:
-  `CRAFTSUITE_LAYER_VERSION=0.4.2` with the checksum of its hosting bundle, the download of the
-  Nextcloud app and the links to the layer's documentation. Its translators handle the Craft
-  releases of 2026-10-14 (0.4.1 handled those of 2026-10-12, 0.4.0 the earlier ones); its
-  Nextcloud app only has a new version number. `compose.yaml` is unchanged.
+## [0.4.0] - 2026-10-17
+
+The apps come from the app list of nextcloud-craftsuite-layer, SoundCraft joins, and the canary
+is read per app and per layer version. Needs nextcloud-craftsuite-layer 0.5.0 or later for the app
+list; `.env.example` names 0.5.1.
+
+- **The app list.** `CRAFT_APPS=auto`, the new default, serves the apps that `apps.json` of the
+  pinned layer release lists, in its order, so that an app a new layer release adds is served
+  without a change here. `auto -lightcraft` leaves one out, `auto <app>` adds one, and a list of
+  app ids works as before. An app that a later layer release no longer lists stays served, without
+  updates and without the Nextcloud integration, until you remove it
+  ([operations.md](docs/operations.md#removing-an-app)).
+- **Values from the app list** replace the built-in ones: the name, the short German and English
+  text and the colour on the start page (several colours change slightly), the startup timeout
+  (180000 ms for LightCraft and EffectCraft) and the oldest release the layer's adapter handles
+  (`minVersion`): older releases are never taken, and a version below it that is being served
+  (after a rollback, say) runs without the translator, with an error, until a newer one is taken.
+  Every value is checked first; an app whose entry is invalid gets no update. When the app list
+  cannot be read, nothing changes, and the start page keeps the last one that could
+  (`state/app-list`). An app named in `CRAFT_APPS` that the list does not have is not tested by the
+  layer's canary: only the minimum age applies to it.
+- **SoundCraft** (0.6.1 and later, with layer 0.5.0 and later): audio sessions, `.scraftz`.
+- **`CRAFTSUITE_STARTUP_TIMEOUTS`** now defaults to empty; an entry still overrides the app
+  list's value for its app.
+- **The canary per app.** A failed canary run holds back only the apps its report names (the
+  line `canary-result {...}` the layer writes into its `canary` issue since 0.5.0), or all apps
+  when it names none or has no report. This applies to all three rules: an open issue holds the
+  apps its reports and labels name, and a failure since the layer came into use holds those apps,
+  with an error, until another layer version is in use or you confirm (a failure only of apps you
+  do not serve is a log line, not an error). `state/canary-failed` gets a third line with the apps.
+  Only reports written by the workflow (`github-actions[bot]`) count,
+  and each one seen is kept in `state/canary-reports`, so that a later page of comments cannot
+  lose it.
+- **Only runs of the pinned layer count.** The updater reads the layer version each run tested from
+  `translators/core.js` at the run's commit (on raw.githubusercontent.com, no API request, kept in
+  `state/canary-layers`). A release is taken only if the first run of the pinned layer version
+  after it tested and passed it. This replaces the rule that a release whose first run failed is
+  never taken: after a fix in a new layer release, the first run of that release decides, so the
+  releases a failure held back come by themselves once you move to it (0.3.0 needed a run without
+  the canary). Runs of a newer layer release do not count either: releases that come out after it
+  wait until you move to it, and three days after the newest run of your layer version this is an
+  error that says so.
+- **Stricter about what a run tested.** A run that is still running (also the re-run of an older
+  one) holds the releases it is the first run for; a re-run that ended otherwise (`cancelled`,
+  `timed_out`, ...) counts as failed for the apps its earlier attempts' reports name, else for all;
+  a release that was not the highest version out when the run ended, or that the run's report
+  says it did not fetch, counts as untested; when the list
+  of the last 100 runs is full, a release older than all of them is not taken. For a release that
+  waits, the log now says why (`... qualifies yet (<version>: <reason>)`), and says so when it
+  will not come with this layer version.
+- **A new app while a canary issue is open** waits without an error (0.3.0 reported one on every
+  run).
+- **GitHub requests:** fifteen API requests per run with twelve apps (one per app, the canary's
+  runs, its issues and, while a failed run or a re-run is listed, the comments of the issues),
+  and one plain download per new commit the canary ran on.
+- The start page says "audio" in its tagline; a canary hold names the apps it holds.
+- docs/operations.md: `occ upgrade` shows the Nextcloud app's repair step only with `-v`.
+
+Upgrading from 0.3.0 ([docs/operations.md](docs/operations.md#updating-craftsuite-webapp)):
+
+- Move to layer 0.5.0 or later in the same step: set `CRAFTSUITE_LAYER_VERSION` and
+  `CRAFTSUITE_LAYER_SHA256` of the new release, and upgrade the Nextcloud app to the same version
+  ([docs/nextcloud.md](docs/nextcloud.md#on-nextclouds-side)). There, one address for all apps
+  (`apps_base_url`) gives new apps their entries without a setting of their own.
+- Set `CRAFT_APPS=auto` (or remove the line) to serve every app the layer lists, SoundCraft
+  included; an explicit list keeps serving the apps it names.
+- Remove `CRAFTSUITE_STARTUP_TIMEOUTS=lightcraft=180000 effectcraft=180000` if you have it: the
+  app list recommends the same values.
+- With a layer before 0.5.0 there is no app list: name the apps in `CRAFT_APPS` and set
+  `CRAFTSUITE_STARTUP_TIMEOUTS` yourself; the start page then shows the app ids without texts and
+  colours, and no `minVersion` applies.
+- Going back to 0.3.0 keeps the data folder: 0.3.0 reads the first two lines of
+  `state/canary-failed` and ignores the new state files, and an app it does not list (SoundCraft)
+  stays served without updates.
+- Since 0.3.0 the documentation and `.env.example` named layer 0.4.2 (on `main` since 2026-10-16);
+  they now name 0.5.1.
 
 ## [0.3.0] - 2026-10-12
 

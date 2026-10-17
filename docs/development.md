@@ -34,10 +34,13 @@ When `dockerfile_inline` of the updater changes, raise its image tag.
 - `for f in src/*.sh tools/*.sh; do sh -n "$f" || echo "$f"; done` catches syntax errors;
   ShellCheck (`shellcheck -s sh src/*.sh tools/*.sh`) catches more.
 - Run the updater outside Docker against a scratch folder: `CRAFT_BASE=/tmp/craft-test sh
-  src/craft-update.sh` with the settings in the environment. Each run makes one request to the
-  GitHub API per app in `CRAFT_APPS`, plus two for the canary (its runs and its issues) when the
-  integration and the canary check are on: thirteen with the eleven default apps. The API allows
-  60 per hour per IP address without authentication.
+  src/craft-update.sh` with the settings in the environment. Without `CRAFTSUITE_LAYER_VERSION`
+  there is no app list, so name the apps in `CRAFT_APPS`. Each run makes one request to the
+  GitHub API per app, plus up to three for the canary (its runs, its issues and, while a failed
+  run or a re-run is listed, the comments on its issues) when the integration and the canary check
+  are on: fifteen with the twelve apps of layer 0.5.1. Each new commit the canary ran on adds a
+  download from `raw.githubusercontent.com`. The API allows 60 per hour per IP address without
+  authentication.
 - For nginx, write the configuration without starting nginx, then test it:
 
   ```sh

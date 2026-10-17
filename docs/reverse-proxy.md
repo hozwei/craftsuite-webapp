@@ -18,7 +18,9 @@
 
 - HSTS (`Strict-Transport-Security`) is fine and recommended.
 - `X-Forwarded-For` and `X-Forwarded-Proto` do no harm. WebSockets are not used.
-- No request bodies larger than a few kilobytes are sent: the apps never upload files.
+- No request bodies larger than a few kilobytes are sent: the apps never upload files here. Saves
+  from the Nextcloud editor go to Nextcloud, whose own reverse proxy must take large requests
+  for SoundCraft's sessions ([nextcloud.md](nextcloud.md#soundcraft-sessions)).
 
 ## Examples
 

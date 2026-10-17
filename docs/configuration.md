@@ -11,9 +11,8 @@ docker compose up -d
 control (it is in `.gitignore`). Values are plain text; put a value in single quotes if it
 contains `$`, `#` or a backslash (spaces between words need no quotes).
 
-The *Default* columns give the value `compose.yaml` uses when a setting is missing or empty
-(`CRAFTSUITE_STARTUP_TIMEOUTS`: only when it is missing); `.env.example` fills in example values
-for some of them.
+The *Default* columns give the value `compose.yaml` uses when a setting is missing or empty;
+`.env.example` fills in example values for some of them.
 
 ## Where the apps are served
 
@@ -51,8 +50,55 @@ of 12 hours costs little.
 | Setting | Default | Meaning |
 |---|---|---|
 | `CRAFT_UPDATE_TIME` | `07:00` | Daily update time (`HH:MM`, in `TZ`; anything else is replaced by `07:00`, with a line in the log). The updater also runs when its container starts, and an hour after a failed run (up to three times). Choose a time after your backups. |
-| `CRAFT_MIN_AGE_HOURS` | `24` | A release is taken only when it is at least this many hours old, so that bad releases can be withdrawn first. With the canary check on, the first run of the layer's canary after a release must also have tested and passed it ([how-it-works.md](how-it-works.md#the-canary), including its limits); two to three days also give the next canary run time to report a failure the first one missed. `0` takes the newest qualifying release at once (for one manual run, see [operations.md](operations.md#update-now)). |
-| `CRAFT_APPS` | `pdfcraft photocraft vectorcraft designcraft wordcraft gridcraft deckcraft cadcraft lightcraft filmcraft effectcraft` | The apps to serve, separated by spaces. Each must publish `<app>-web-<version>.zip` in its releases at `github.com/storytold/<app>`. Removing one stops its updates and drops it from the start page, but it stays reachable at `/<app>/` until you delete it: `docker exec craft-update sh -c 'rm -rf /craft/www/<app> /craft/www/releases/<app>-* /craft/state/<app>.*'`. |
+| `CRAFT_MIN_AGE_HOURS` | `24` | A release is taken only when it is at least this many hours old (a whole number, at most 999999), so that bad releases can be withdrawn first. With the canary check on, the first run of the layer's canary for your layer version after a release must also have tested it and passed for its app ([how-it-works.md](how-it-works.md#the-canary), including its limits); two to three days also let the next canary run hold the release back if it fails for the app. `0` takes the newest qualifying release at once (for one manual run, see [operations.md](operations.md#update-now)). |
+| `CRAFT_APPS` | `auto` | The apps to serve: `auto`, app ids and `-<app>`, separated by spaces (see [the app list](#the-app-list) below). Each app must publish `<app>-web-<version>.zip` in its GitHub releases. |
+
+### The app list
+
+`CRAFT_APPS` takes these words:
+
+- `auto`: the apps in the app list of the pinned layer release (`apps.json` in its hosting bundle,
+  nextcloud-craftsuite-layer 0.5.0 and later), in its order. With layer 0.5.1 these are the twelve
+  apps from PdfCraft to SoundCraft. An app that a later layer release adds is served once you use
+  that release, without a change here.
+- `-<app>` leaves an app out: `auto -lightcraft`.
+- `<app>` adds an app: `auto <app>` serves one that the app list does not have, and a list of app
+  ids alone, such as `pdfcraft photocraft`, serves exactly these.
+- Empty, missing, or nothing but exclusions: `auto` (with the exclusions).
+
+A word that is none of these is an error of the run and is ignored; a list of nothing but such
+words keeps the installed apps. Without the Nextcloud
+integration (`CRAFTSUITE_LAYER_VERSION` empty) there is no app list: `auto` then stands for the
+apps already installed, with a line in the log, and on a new data folder for none, which is an
+error; name the apps instead. With a layer before 0.5.0, `auto` is an error of every run (the
+installed apps are still kept up to date): name the apps there too.
+
+For each app it has, the app list gives:
+
+- the name, the short text (in `CRAFT_LANGUAGE`, else English) and the colour on the start page;
+- the repository on GitHub its releases come from (`repo`); an app it does not have is taken from
+  `github.com/storytold/<app>`;
+- the startup timeout (`startupTimeout`): 180000 ms for LightCraft and EffectCraft, unless
+  `CRAFTSUITE_STARTUP_TIMEOUTS` has an entry for the app ([below](#nextcloud-integration));
+- the oldest release the layer's adapter handles (`minVersion`): older releases are never taken.
+  A version below it that is being served (after a rollback, say, or when a newer layer raises
+  it) runs without the translator, and every run reports an error until a newer release is taken;
+  `--status` shows `Nextcloud - (older than <minVersion>, the oldest the layer handles)`.
+
+Every value is checked first. An invalid colour, name, text or timeout is not used. An app whose
+entry has an invalid repository or `minVersion` gets no update, and its served version stays as it is,
+with an error on every run (with `auto` and named in `CRAFT_APPS` alike). An app named in
+`CRAFT_APPS` that the list does not have is not tested by the layer's canary, so only
+`CRAFT_MIN_AGE_HOURS` applies to it. When the app list cannot be read, nothing changes and the
+start page keeps the last one that could. Without an app list (a layer before 0.5.0), the start
+page shows the app ids, without texts and colours, and no `minVersion` applies.
+the app ids, without texts and colours, and no `minVersion` applies.
+
+An app that is served but not in the list stays reachable at `/<app>/`, but is not on the start
+page and gets no updates. One that the layer's app list no longer has (with `auto`) also loses the
+translator, which no longer fits it; one you left out (`-<app>`, or not named in a list of ids) is
+left as it is. Each run logs it; to delete it, see
+[operations.md](operations.md#removing-an-app).
 
 ## Start page
 
@@ -62,10 +108,12 @@ of 12 hours costs little.
 | `CRAFT_LINK_URL` | empty | Optional button at the top right, for example to your Nextcloud Files (`https://cloud.example.com/apps/files/`). Empty: no button. |
 | `CRAFT_LINK_LABEL` | `Nextcloud` | The button's text. |
 
-The start page lists each app with its icon and version, a short help on saving, and the time of
-the last update check. After a failed check it shows a notice; while no app is installed, it says
-so instead, also after a check without errors. With the Nextcloud integration on it also tells
-people how to open files from Nextcloud.
+The start page lists each app with its icon, name, short text and version, in the order of
+`CRAFT_APPS` (for `auto`, that of the app list), a short help on saving, and the time of the last
+update check. Names, texts and colours come from the layer's app list. After a failed check it
+shows a notice; while no app is installed, it says so instead, also after a check without errors.
+While a canary failure holds back new releases, a notice names the apps and links the issue. With
+the Nextcloud integration on it also tells people how to open files from Nextcloud.
 
 ## Nextcloud integration
 
@@ -75,18 +123,18 @@ All three of the first settings are needed for the integration; see
 | Setting | Default | Meaning |
 |---|---|---|
 | `CRAFTSUITE_ALLOWED_ORIGINS` | empty | The origins of the Nextcloud servers that may frame the apps, separated by spaces: `https://host` or `https://host:port`, exactly as the browser shows them, without a path or a slash at the end. It goes into the `frame-ancestors` header and into the translator; `craft-web` refuses to start with anything else. Empty: no site may frame the apps (`frame-ancestors 'none'`). |
-| `CRAFTSUITE_LAYER_VERSION` | empty | The release of [nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer) whose translator the updater adds, such as `0.4.2`. Empty: the apps are served without the translator. Use the same version as the Nextcloud app. |
+| `CRAFTSUITE_LAYER_VERSION` | empty | The release of [nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer) whose translator the updater adds, such as `0.5.1`; its hosting bundle also brings the app list (0.5.0 and later). Empty: the apps are served without the translator. Use the same version as the Nextcloud app. |
 | `CRAFTSUITE_LAYER_SHA256` | empty | The SHA-256 of that release's `craftsuite-layer-hosting-<version>.tar.gz`, from its `SHA256SUMS` file. The updater refuses a bundle with another checksum. |
-| `CRAFTSUITE_LAYER_REPO` | `hozwei/nextcloud-craftsuite-layer` | Where the bundle and the canary's runs and issues come from (`owner/repository` on GitHub), for a fork. |
+| `CRAFTSUITE_LAYER_REPO` | `hozwei/nextcloud-craftsuite-layer` | Where the bundle and the canary's runs, issues and tested translators come from (`owner/repository` on GitHub), for a fork. |
 | `CRAFTSUITE_CANARY` | `on` | `off`: take app releases without looking at the layer's canary (no waiting for a run or for open issues, no canary hold). |
-| `CRAFTSUITE_STARTUP_TIMEOUTS` | `lightcraft=180000 effectcraft=180000` | How long the translator waits for an app to start, counted from the page's `load` event: entries `<app>=<milliseconds>` (1 to 2147483647), separated by spaces. Apps not listed get the translator's default of 60 seconds. LightCraft and EffectCraft download their `.wasm` (LightCraft also a font) while this time runs; 60 seconds are too short below about 3 Mbit/s for LightCraft (about 24 MB with gzip) and about 2.4 Mbit/s for EffectCraft (about 18 MB). FilmCraft fits into 60 seconds down to about 2 Mbit/s: add `filmcraft=180000` for users on slow connections. Set but empty: every app gets the default. A changed value reaches the served versions on the next run. An invalid entry is an error of the run (`layer: ERROR - CRAFTSUITE_STARTUP_TIMEOUTS takes entries …`), and new releases wait. With layer 0.1.0 no timeout is passed (the value is still checked). |
+| `CRAFTSUITE_STARTUP_TIMEOUTS` | empty | How long the translator waits for an app to start, counted from the page's `load` event: entries `<app>=<milliseconds>` (1 to 2147483647), separated by spaces. An entry overrides the app list's `startupTimeout` for its app; apps with neither get the translator's default of 60 seconds. The app list recommends 180000 for LightCraft and EffectCraft, which download their `.wasm` (LightCraft also a font) while this time runs; 60 seconds are too short below about 3 Mbit/s for LightCraft (about 24 MB with gzip) and about 2.4 Mbit/s for EffectCraft (about 18 MB). FilmCraft fits into 60 seconds down to about 2 Mbit/s: add `filmcraft=180000` for users on slow connections. With a layer before 0.5.0 there is no app list: set `lightcraft=180000 effectcraft=180000` yourself. A changed value reaches the served versions on the next run. An invalid entry is an error of the run (`layer: ERROR - CRAFTSUITE_STARTUP_TIMEOUTS takes entries …`), and new releases wait. With layer 0.1.0 no timeout is passed (the value is still checked). |
 
-For nextcloud-craftsuite-layer 0.4.2 the checksum is
-`0e71509f5332ab11f09f49ddf1ec896f502f08b315abccc699d5fa6492f23ede`. For another release, take it
+For nextcloud-craftsuite-layer 0.5.1 the checksum is
+`78b8ef13419204c1148a10b0eddea9df32c5170103dbe3460b3e67993547aa32`. For another release, take it
 from that release's `SHA256SUMS`:
 
 ```sh
-curl -fsSL https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.2/SHA256SUMS
+curl -fsSL https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.1/SHA256SUMS
 ```
 
 ## Fixed settings

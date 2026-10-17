@@ -67,7 +67,8 @@ anywhere.
 
 Requirements: Nextcloud 34 or 35, the apps on a host name of their own under the same
 registrable domain as Nextcloud (`craft.example.com` next to `cloud.example.com`), and the same
-release of nextcloud-craftsuite-layer on both sides. This page uses 0.4.2.
+release of nextcloud-craftsuite-layer on both sides. This page uses 0.5.1; the app list that
+`CRAFT_APPS=auto` takes the apps from needs 0.5.0 or later.
 
 ### On the apps' side
 
@@ -75,8 +76,8 @@ In `.env`:
 
 ```sh
 CRAFTSUITE_ALLOWED_ORIGINS=https://cloud.example.com
-CRAFTSUITE_LAYER_VERSION=0.4.2
-CRAFTSUITE_LAYER_SHA256=0e71509f5332ab11f09f49ddf1ec896f502f08b315abccc699d5fa6492f23ede
+CRAFTSUITE_LAYER_VERSION=0.5.1
+CRAFTSUITE_LAYER_SHA256=78b8ef13419204c1148a10b0eddea9df32c5170103dbe3460b3e67993547aa32
 ```
 
 `CRAFTSUITE_ALLOWED_ORIGINS` is your Nextcloud's address exactly as the browser shows it, without
@@ -95,8 +96,8 @@ docker exec craft-update craft-update --status
 ```
 
 Every app should show `Nextcloud yes`, and the last line `OK …`. The updater has downloaded the
-layer's hosting bundle, checked it against the checksum, and added the translator to the
-versions being served.
+layer's hosting bundle, checked it against the checksum, taken the apps from its app list, and
+added the translator to the versions being served.
 
 ### On Nextcloud's side
 
@@ -104,17 +105,19 @@ versions being served.
 
    ```sh
    cd "$(mktemp -d)"
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.2/craftsuite_layer-0.4.2.tar.gz
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.4.2/SHA256SUMS
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.1/craftsuite_layer-0.5.1.tar.gz
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.1/SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS
    ```
 
+   Expect `craftsuite_layer-0.5.1.tar.gz: OK`; its SHA-256 is
+   `535bebb58aee3cbc34a3867c7122da73c106d631b9f7f10a7ff911e7b25f2f67`.
 2. Unpack it into Nextcloud's `custom_apps` folder (`/var/www/html/custom_apps` in the official
    image; on the host, wherever that folder is mounted), owned by the web server user (33:33 in the
    official image), and enable it:
 
    ```sh
-   tar -xzf craftsuite_layer-0.4.2.tar.gz -C /path/to/nextcloud/custom_apps
+   tar -xzf craftsuite_layer-0.5.1.tar.gz -C /path/to/nextcloud/custom_apps
    chown -R 33:33 /path/to/nextcloud/custom_apps/craftsuite_layer
    occ app:enable craftsuite_layer
    ```
@@ -122,23 +125,24 @@ versions being served.
    To offer it only to the group that may use the apps, enable it with
    `occ app:enable -g craft craftsuite_layer` instead; check with
    `occ config:app:get craftsuite_layer enabled` (expect `["craft"]`).
-3. Set the addresses of the apps you serve, with the slash at the end; the app refuses an address
+3. Set the address for all apps, `https://<CRAFT_HOST>/` with the slash at the end; each app is
+   then at `https://craft.example.com/<app>/`, as this stack serves it. The app refuses an address
    with a query (`?…`). An app without an address has no entry in Files:
 
    ```sh
-   occ config:app:set craftsuite_layer pdfcraft_url --value=https://craft.example.com/pdfcraft/
-   occ config:app:set craftsuite_layer photocraft_url --value=https://craft.example.com/photocraft/
-   occ config:app:set craftsuite_layer vectorcraft_url --value=https://craft.example.com/vectorcraft/
-   occ config:app:set craftsuite_layer designcraft_url --value=https://craft.example.com/designcraft/
-   occ config:app:set craftsuite_layer wordcraft_url --value=https://craft.example.com/wordcraft/
-   occ config:app:set craftsuite_layer gridcraft_url --value=https://craft.example.com/gridcraft/
-   occ config:app:set craftsuite_layer deckcraft_url --value=https://craft.example.com/deckcraft/
-   occ config:app:set craftsuite_layer cadcraft_url --value=https://craft.example.com/cadcraft/
-   occ config:app:set craftsuite_layer lightcraft_url --value=https://craft.example.com/lightcraft/
-   occ config:app:set craftsuite_layer filmcraft_url --value=https://craft.example.com/filmcraft/
-   occ config:app:set craftsuite_layer effectcraft_url --value=https://craft.example.com/effectcraft/
+   occ config:app:set craftsuite_layer apps_base_url --value=https://craft.example.com/
    occ config:list craftsuite_layer
    ```
+
+   The address for all apps needs the Nextcloud app 0.5.0 or later. The keys of the apps' own
+   addresses (`pdfcraft_url`, `photocraft_url`, …) still work, as before 0.5.0, and take
+   precedence. With the address for all apps, an app that a later release of the Nextcloud app
+   brings has its entries at once: switch it off until this stack serves it, on the settings page
+   or with
+   `occ config:app:set craftsuite_layer <app>_disabled --value=true --type=boolean`
+   (`occ config:app:delete craftsuite_layer <app>_disabled` switches it on again), or upgrade
+   Nextcloud only after `--status` shows the app
+   ([operations.md](operations.md#upgrading-nextcloud-craftsuite-layer)).
 
 4. In *Administration settings* → *Craft apps*, each address must appear without an error message.
    "The Craft app must be hosted on another host name than Nextcloud" means the apps' host name is
@@ -146,20 +150,21 @@ versions being served.
 
 In Files, a PDF now has "Open in PdfCraft" in its menu; PSD and IDML files open in PhotoCraft and
 DesignCraft with a click, `.deckcraft` in DeckCraft, camera raw files (`.dng`, `.cr3`, `.nef`, …)
-in LightCraft, `.fcproj` in FilmCraft, `.ecproj` in EffectCraft, and `.dxf` in CADCraft (in
-VectorCraft if CADCraft has no address). Office files (`.docx`, `.xlsx`, `.pptx`, …) have
-WordCraft, GridCraft and DeckCraft in their menu only, so a click on them stays with Nextcloud
-Office, ONLYOFFICE or Euro-Office where one is installed; JPEG, PNG, TIFF and WebP pictures have
-PhotoCraft and LightCraft in their menu only. A Craft app made the default app (below) takes the
-click on all its types. FilmCraft and EffectCraft open and save their project files only: the
-media a project uses are not in the file and are missing when it is opened from Nextcloud. The
-layer's [Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/docs/nextcloud-app.md)
+in LightCraft, `.fcproj` in FilmCraft, `.ecproj` in EffectCraft, `.scraftz` in SoundCraft, and
+`.dxf` in CADCraft (in VectorCraft if CADCraft has no address). Office files (`.docx`, `.xlsx`,
+`.pptx`, …) have WordCraft, GridCraft and DeckCraft in their menu only, so a click on them stays
+with Nextcloud Office, ONLYOFFICE or Euro-Office where one is installed; JPEG, PNG, TIFF and WebP
+pictures have PhotoCraft and LightCraft in their menu only. A Craft app made the default app
+(below) takes the click on all its types. FilmCraft and EffectCraft open and save their project
+files only: the media a project uses are not in the file and are missing when it is opened from
+Nextcloud. The layer's
+[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/nextcloud-app.md)
 lists every file type, the editor page's messages and what happens on save.
 
-What the Nextcloud app 0.3.0 and 0.4.0 added, in short; the settings and their limits are in the
+What the Nextcloud app 0.3.0 to 0.5.0 added, in short; the settings and their limits are in the
 layer's documentation, under
-[Configuring](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/docs/nextcloud-app.md#configuring)
-and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/docs/nextcloud-app.md#files):
+[Configuring](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/nextcloud-app.md#configuring)
+and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/nextcloud-app.md#files):
 
 - **Entries only for the enabled groups.** Enabled with `-g` (step 2), the app shows its entries
   in Files only to the members of those groups; before 0.3.0, everybody saw them.
@@ -167,7 +172,7 @@ and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/doc
   `occ config:app:set craftsuite_layer <app>_language --value=…`: `user` (the user's Nextcloud
   language) or one of the app's languages, such as `de`; empty, the app decides. It needs
   translator 0.3.0 or later, so `CRAFTSUITE_LAYER_VERSION` 0.3.0 or later here. DesignCraft,
-  WordCraft and DeckCraft always start in English.
+  WordCraft, DeckCraft and SoundCraft always start in English.
 - **File type icons**: Files shows the apps' icons on the files they open where Nextcloud has only
   a general icon (`.psd`, `.dxf`, camera raws, …). For the extensions Nextcloud does not know, the
   app writes MIME types into `config/mimetypemapping.json` and `config/mimetypealiases.json` when
@@ -180,8 +185,22 @@ and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.4.2/doc
 - **A default app**: PdfCraft, PhotoCraft, VectorCraft, WordCraft, GridCraft, DeckCraft and
   LightCraft can take the click on all their file types ("On a click" on the settings page, or
   `<app>_default_app`); the app that had the click before stays in the file's menu.
-- **"+ New" entries** in Files for the apps' own formats; WordCraft, GridCraft and PdfCraft get one
-  only as the default app.
+- **"+ New" entries** in Files for the apps' own formats, such as "New SoundCraft session" (an
+  empty session); WordCraft, GridCraft and PdfCraft get one only as the default app.
+- **The address for all apps and switching an app off** (0.5.0): `apps_base_url` and
+  `<app>_disabled` (step 3), or "All apps" and the tick per app on the settings page.
+
+### SoundCraft sessions
+
+SoundCraft (0.6.1 and later, with the layer 0.5.0 and later) opens and saves `.scraftz` sessions,
+and "+ New" makes a new, empty one. Each save uploads the whole session with its audio, as 32-bit
+float WAV, in one request (`PUT`): the 35-second demo session is 66 MB. The reverse proxy in front
+of Nextcloud, and its web server, must accept request bodies that large and larger (nginx:
+`client_max_body_size`, 1 MB by default; Nextcloud's
+[notes on uploading big files](https://docs.nextcloud.com/server/latest/admin_manual/configuration_files/big_file_upload_configuration.html)).
+Every save is a new version of the file in Nextcloud, each as large as the session. What the
+adapter does and does not handle is on the layer's
+[SoundCraft page](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/apps/soundcraft.md#known-gaps).
 
 ### Nextcloud's own headers
 

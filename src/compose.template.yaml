@@ -1,7 +1,7 @@
-# craftsuite-webapp: the Craft web apps by storytold (PdfCraft, PhotoCraft, VectorCraft,
-# DesignCraft, WordCraft, GridCraft, DeckCraft, CADCraft, LightCraft, FilmCraft, EffectCraft)
-# behind an OpenID Connect sign-in, kept up to date from their GitHub releases, and optionally
-# opening files from Nextcloud through nextcloud-craftsuite-layer.
+# craftsuite-webapp: the Craft web apps by storytold (PdfCraft, PhotoCraft, VectorCraft and the
+# others nextcloud-craftsuite-layer lists) behind an OpenID Connect sign-in, kept up to date from
+# their GitHub releases, and optionally opening files from Nextcloud through
+# nextcloud-craftsuite-layer.
 #
 # Settings come from .env next to this file (copy .env.example). Documentation: README.md and
 # docs/. For a UI that takes one YAML without an .env file (TrueNAS SCALE custom apps), render
@@ -121,7 +121,7 @@ services:
       PATH: "/tmp/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
       CRAFT_UPDATE_TIME: "${CRAFT_UPDATE_TIME:-07:00}"
       CRAFT_MIN_AGE_HOURS: "${CRAFT_MIN_AGE_HOURS:-24}"
-      CRAFT_APPS: "${CRAFT_APPS:-pdfcraft photocraft vectorcraft designcraft wordcraft gridcraft deckcraft cadcraft lightcraft filmcraft effectcraft}"
+      CRAFT_APPS: "${CRAFT_APPS:-auto}"
       CRAFT_LANGUAGE: "${CRAFT_LANGUAGE:-en}"
       CRAFT_LINK_URL: "${CRAFT_LINK_URL:-}"
       CRAFT_LINK_LABEL: "${CRAFT_LINK_LABEL:-Nextcloud}"
@@ -130,7 +130,7 @@ services:
       CRAFTSUITE_LAYER_SHA256: "${CRAFTSUITE_LAYER_SHA256:-}"
       CRAFTSUITE_LAYER_REPO: "${CRAFTSUITE_LAYER_REPO:-hozwei/nextcloud-craftsuite-layer}"
       CRAFTSUITE_CANARY: "${CRAFTSUITE_CANARY:-on}"
-      CRAFTSUITE_STARTUP_TIMEOUTS: "${CRAFTSUITE_STARTUP_TIMEOUTS-lightcraft=180000 effectcraft=180000}"
+      CRAFTSUITE_STARTUP_TIMEOUTS: "${CRAFTSUITE_STARTUP_TIMEOUTS:-}"
     volumes:
       - "${CRAFT_DATA_DIR:-./data}:/craft"
     read_only: true

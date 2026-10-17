@@ -1,38 +1,53 @@
 #!/bin/sh
 # craft-update: keeps the Craft web apps (storytold) up to date from their GitHub releases.
 # Per app and release: verify, unpack, add the nextcloud-craftsuite-layer translator, compress,
-# switch in one step (the previous version stays for a rollback). Writes the start page.
+# switch in one step (the previous version stays for a rollback). Writes the start page. The apps
+# and their names, colours, startup timeouts and oldest supported releases come from the app list
+# of the pinned layer release (apps.json in its hosting bundle).
 #   craft-update                  check all apps and update where a release is due
 #   craft-update --status         installed, previous and blocked versions, translator state
 #   craft-update --rollback APP   back to the previous version; the current one is blocked
 set -u
 umask 022
 
-APPS=${CRAFT_APPS:-"pdfcraft photocraft vectorcraft designcraft wordcraft gridcraft deckcraft cadcraft lightcraft filmcraft effectcraft"}
+APPS_SPEC=${CRAFT_APPS:-auto}
 BASE=${CRAFT_BASE:-/craft}
 LANGUAGE=${CRAFT_LANGUAGE:-en}
 LAYER_VERSION=${CRAFTSUITE_LAYER_VERSION:-}
 LAYER_SHA256=${CRAFTSUITE_LAYER_SHA256:-}
 LAYER_REPO=${CRAFTSUITE_LAYER_REPO:-hozwei/nextcloud-craftsuite-layer}
 CANARY=${CRAFTSUITE_CANARY:-on}
-STARTUP_TIMEOUTS=${CRAFTSUITE_STARTUP_TIMEOUTS-"lightcraft=180000 effectcraft=180000"}
+STARTUP_TIMEOUTS=${CRAFTSUITE_STARTUP_TIMEOUTS:-}
 API=https://api.github.com/repos
-RAW=https://raw.githubusercontent.com/storytold
+RAW=https://raw.githubusercontent.com
 WWW=$BASE/www
 REL=$WWW/releases
 STATE=$BASE/state
 LAYERS=$BASE/layer
 # The layer's canary is its workflow canary.yml (daily, or started by hand), which tests the
-# newest release of each app. When its newest run that tested something started longer ago than
-# this (seconds), the canary has stopped, and new releases would wait for it without a word.
+# newest release of each app. When its newest run that tested the pinned layer started longer ago
+# than this (seconds), new releases would wait for one without a word.
 CANARY_STALE=259200
 INJ=
 HOLD=
+APPS=
+AUTO=
+DEL=
+MANIFEST=
+MANIFEST_STATE=
+MANIFEST_NOTE=
+MANIFEST_BAD=
+BAD_IDS=
+ORDER=
+LIST_ERRORS=0
 RUNS='[]'
-ISSUES='[]'
-OPEN=
-FAILED=
+HORIZON=null
+OPEN_APPS=
+OPEN_URL=
+FAILED_APPS=
+FAILED_URL=
 STALE=
+NEWER=
 
 log() { echo "$(date '+%F %T') $*"; }
 
@@ -41,6 +56,9 @@ case $hours in
   '' | *[!0-9]*) log "ERROR - CRAFT_MIN_AGE_HOURS must be a whole number of hours"; exit 2 ;;
 esac
 hours=$(printf '%s' "$hours" | sed 's/^0*//')
+case $hours in
+  ???????*) log "ERROR - CRAFT_MIN_AGE_HOURS must be at most 999999 hours"; exit 2 ;;
+esac
 MIN_AGE=$(( ${hours:-0} * 3600 ))
 case $LANGUAGE in
   de | en) ;;
@@ -56,45 +74,10 @@ drop() { [ -e "$1" ] || return 0; chmod -R u+rwX "$1" 2>/dev/null; rm -rf "$1"; 
 
 esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g'; }
 
-app_info() {
-  name=$1 short=$(printf '%.2s' "$1") text=""
-  case $1 in
-    pdfcraft) name=PdfCraft short=Pd ;;
-    photocraft) name=PhotoCraft short=Ph ;;
-    vectorcraft) name=VectorCraft short=Vc ;;
-    designcraft) name=DesignCraft short=Dc ;;
-    wordcraft) name=WordCraft short=Wd ;;
-    gridcraft) name=GridCraft short=Gr ;;
-    deckcraft) name=DeckCraft short=Dk ;;
-    cadcraft) name=CADCraft short=Cd ;;
-    lightcraft) name=LightCraft short=Lt ;;
-    filmcraft) name=FilmCraft short=Fm ;;
-    effectcraft) name=EffectCraft short=Fx ;;
-  esac
-  case $LANGUAGE:$1 in
-    de:pdfcraft) text="PDFs ansehen, kommentieren und bearbeiten" ;;
-    de:photocraft) text="Fotos und Ebenen bearbeiten, auch PSD" ;;
-    de:vectorcraft) text="Vektorgrafiken und Logos zeichnen, auch SVG" ;;
-    de:designcraft) text="Layouts und Drucksachen setzen" ;;
-    de:wordcraft) text="Texte schreiben und gestalten, auch DOCX" ;;
-    de:gridcraft) text="Tabellen berechnen und auswerten, auch XLSX" ;;
-    de:deckcraft) text="Präsentationen gestalten, auch aus PPTX" ;;
-    de:cadcraft) text="2D-Zeichnungen konstruieren, im DXF-Format" ;;
-    de:lightcraft) text="Fotos und Kamera-RAWs entwickeln und exportieren" ;;
-    de:filmcraft) text="Videos und Filmprojekte schneiden" ;;
-    de:effectcraft) text="Animationen und visuelle Effekte gestalten" ;;
-    en:pdfcraft) text="View, annotate and edit PDFs" ;;
-    en:photocraft) text="Edit photos and layers, PSD included" ;;
-    en:vectorcraft) text="Draw vector graphics and logos, SVG included" ;;
-    en:designcraft) text="Lay out pages and print matter" ;;
-    en:wordcraft) text="Write and format documents, DOCX included" ;;
-    en:gridcraft) text="Calculate and analyse spreadsheets, XLSX included" ;;
-    en:deckcraft) text="Build presentations, also from PPTX" ;;
-    en:cadcraft) text="Draft 2D drawings in DXF" ;;
-    en:lightcraft) text="Develop and export photos and camera raws" ;;
-    en:filmcraft) text="Edit videos and film projects" ;;
-    en:effectcraft) text="Create animations and visual effects" ;;
-  esac
+# An app id: what names its folders, its translator and its path.
+is_id() {
+  case $1 in '' | *[!a-z0-9]* | [!a-z]*) return 1 ;; esac
+  [ "${#1}" -le 32 ]
 }
 
 version_of() {
@@ -102,6 +85,159 @@ version_of() {
   case $z in
     "releases/$1-"?*) echo "${z#releases/"$1"-}" ;;
   esac
+}
+
+# The apps being served: the links www/<app> -> releases/<app>-<version>.
+installed_apps() {
+  for l in "$WWW"/*; do
+    [ -L "$l" ] || continue
+    a=${l##*/}
+    is_id "$a" && [ -n "$(version_of "$a")" ] && echo "$a"
+  done
+}
+
+# The app list in the layer bundle $1 (apps.json, format 1), checked and reduced to the values used
+# here, in MANIFEST: one line per app, in the list's order, the fields separated by tabs: id, repo,
+# minVersion, startupTimeout, colour, name, short text (CRAFT_LANGUAGE, else English). Unknown
+# fields are ignored, and an invalid colour, name, text or timeout is left out. An app with an
+# invalid id, repo or minVersion is left out and named in MANIFEST_BAD (BAD_IDS: its id): its
+# releases wait. MANIFEST_STATE: ok, missing (no apps.json: a layer before 0.5.0) or unusable
+# (MANIFEST_NOTE says why).
+load_manifest() {
+  MANIFEST='' MANIFEST_NOTE='' MANIFEST_BAD='' BAD_IDS='' ORDER=''
+  f=$1/apps.json
+  if [ ! -f "$f" ]; then
+    MANIFEST_STATE=missing
+    MANIFEST_NOTE="layer $LAYER_VERSION has no app list (apps.json comes with layer 0.5.0 and later)"
+    return 1
+  fi
+  MANIFEST_STATE=unusable
+  # shellcheck disable=SC2016 # jq variables, not the shell's
+  out=$(jq -r --arg lang "$LANGUAGE" '
+    def text($n): if type == "string" then gsub("[[:cntrl:]]"; " ") | if length > 0 and length <= $n then . else null end else null end;
+    if type != "object" then error("not an object")
+    elif .format != 1 then "format \(.format | tostring | gsub("[^0-9a-zA-Z.]"; "?") | .[0:20])"
+    elif (.apps | type) != "object" then error("no apps")
+    else .apps | to_entries[] | .key as $id | .value as $a
+      | if ($id | test("\\A[a-z][a-z0-9]{0,31}\\z") | not) then "bad\t\($id | gsub("[^a-zA-Z0-9_.-]"; "?") | .[0:40])\tits id"
+        elif ($a | type) != "object" then "bad\t\($id)\tits entry"
+        elif (($a.repo | type) != "string") or ($a.repo | test("\\A[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9._-]+\\z") | not) or ($a.repo | test("/\\.\\.?\\z")) then "bad\t\($id)\trepo"
+        elif $a.minVersion != null and ((($a.minVersion | type) != "string") or ($a.minVersion | test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z") | not)) then "bad\t\($id)\tminVersion"
+        else ["app", $id, $a.repo, ($a.minVersion // ""),
+              (if ($a.startupTimeout | type) == "number" and $a.startupTimeout == ($a.startupTimeout | floor)
+                  and $a.startupTimeout >= 1 and $a.startupTimeout <= 2147483647 then $a.startupTimeout | tostring else "" end),
+              (if ($a.color | type) == "string" and ($a.color | test("\\A#[0-9a-f]{6}\\z")) then $a.color else "" end),
+              ($a.name | text(40) // $id),
+              ((if $lang == "de" then ($a.description.de? | text(200)) else null end) // ($a.description.en? | text(200)) // "")]
+          | join("\t")
+        end
+    end' "$f" 2>/dev/null) || {
+    MANIFEST_NOTE="the app list of layer $LAYER_VERSION (apps.json) cannot be read"
+    return 1
+  }
+  case $out in
+    format*)
+      MANIFEST_NOTE="the app list of layer $LAYER_VERSION (apps.json) has ${out}, this updater reads format 1"
+      return 1
+      ;;
+  esac
+  MANIFEST_STATE=ok
+  MANIFEST=$(printf '%s\n' "$out" | awk -F '\t' '$1 == "app" { sub(/^app\t/, ""); print }')
+  MANIFEST_BAD=$(printf '%s\n' "$out" | awk -F '\t' '$1 == "bad" { printf "%s%s (%s)", s, $2, $3; s = ", " }')
+  BAD_IDS=$(printf '%s\n' "$out" | awk -F '\t' '$1 == "bad" && $3 != "its id" { printf "%s ", $2 }')
+  ORDER=$(printf '%s\n' "$out" | awk -F '\t' '$1 == "app" || ($1 == "bad" && $3 != "its id") { printf "%s ", $2 }')
+  return 0
+}
+
+# Without a usable app list (the layer bundle cannot be used, or its apps.json not read), the last
+# one that was usable (state/app-list) stands in for the order, names, texts and colours on the
+# start page; every new release waits then anyway.
+last_manifest() {
+  [ -s "$STATE/app-list" ] || return 1
+  MANIFEST=$(cat "$STATE/app-list") || return 1
+  ORDER=$(printf '%s\n' "$MANIFEST" | cut -f1 | tr '\n' ' ')
+}
+
+# Field $2 of app $1 in MANIFEST: 1 repo, 2 minVersion, 3 startupTimeout, 4 colour, 5 name, 6 text.
+mf() { printf '%s\n' "$MANIFEST" | awk -F '\t' -v a="$1" -v n="$2" '$1 == a { print $(n + 1); exit }'; }
+
+in_manifest() { printf '%s\n' "$MANIFEST" | awk -F '\t' -v a="$1" '$1 == a { f = 1 } END { exit !f }'; }
+
+# Resolves CRAFT_APPS into APPS: "auto" stands for every app of the app list (or, without one,
+# for the installed apps), "<app>" adds one, "-<app>" leaves one out; a list of nothing but
+# exclusions means auto with them. Counts its errors in LIST_ERRORS; with $1 = quiet it logs
+# nothing (for --status and --rollback).
+resolve_apps() {
+  LIST_ERRORS=0
+  add='' DEL='' AUTO='' bad='' nbad=0
+  set -f
+  for t in $APPS_SPEC; do
+    case $t in
+      auto) AUTO=1 ;;
+      -*) if is_id "${t#-}"; then DEL="$DEL ${t#-}"; else bad=$t; fi ;;
+      *) if is_id "$t"; then add="$add $t"; else bad=$t; fi ;;
+    esac
+    if [ -n "$bad" ]; then
+      [ "${1:-}" = quiet ] || log "ERROR - CRAFT_APPS: '$(printf '%.40s' "$bad" | tr -c 'a-z0-9-' '?')' is neither auto, an app such as pdfcraft, nor -<app> to leave one out"
+      LIST_ERRORS=$((LIST_ERRORS + 1))
+      nbad=$((nbad + 1))
+      bad=
+    fi
+  done
+  set +f
+  # Nothing but exclusions: auto with them. Nothing usable at all: the installed apps.
+  [ -n "$add" ] || [ "$nbad" -gt 0 ] || AUTO=1
+  list=
+  if [ -n "$AUTO" ] && [ -n "$ORDER" ]; then
+    list=$ORDER
+  elif [ -n "$AUTO" ] || [ -z "$add" ]; then
+    list=$(installed_apps | sort)
+    if [ -n "$AUTO" ] && [ "${1:-}" != quiet ]; then
+      if [ -z "$LAYER_VERSION" ] && [ -n "$list" ]; then
+        log "CRAFT_APPS=auto without nextcloud-craftsuite-layer: the installed apps are kept up to date; name new apps in CRAFT_APPS"
+      elif [ -z "$LAYER_VERSION" ]; then
+        log "ERROR - CRAFT_APPS=auto takes its apps from the app list of nextcloud-craftsuite-layer, and no layer is set (CRAFTSUITE_LAYER_VERSION): name the apps in CRAFT_APPS, such as pdfcraft photocraft"
+        LIST_ERRORS=$((LIST_ERRORS + 1))
+      elif [ "$MANIFEST_STATE" = missing ]; then
+        log "ERROR - CRAFT_APPS=auto: $MANIFEST_NOTE; name the apps in CRAFT_APPS (the installed ones are kept up to date)"
+        LIST_ERRORS=$((LIST_ERRORS + 1))
+      fi
+    fi
+  fi
+  APPS=
+  for a in $list $add; do
+    case " $DEL $APPS " in *" $a "*) continue ;; esac
+    APPS="${APPS:+$APPS }$a"
+  done
+  if [ -z "$APPS" ] && [ "${1:-}" != quiet ] && [ "$LIST_ERRORS" -eq 0 ] && [ -z "$HOLD" ]; then
+    log "ERROR - CRAFT_APPS ('$(printf '%.200s' "$APPS_SPEC" | tr -c 'a-z0-9 -' '?')') stands for no app: name apps such as pdfcraft, or use auto"
+    LIST_ERRORS=$((LIST_ERRORS + 1))
+  fi
+}
+
+# name, short (two letters for a tile without icon), text and color of app $1, from the app list.
+app_info() {
+  name=$1 text='' color=''
+  if in_manifest "$1"; then
+    name=$(mf "$1" 5)
+    text=$(mf "$1" 6)
+    color=$(mf "$1" 4)
+  fi
+  short=$(printf '%s' "$name" | cut -c1-2)
+  case $short in
+    ??) case $short in *[!A-Za-z0-9]*) short=$(printf '%s' "$1" | cut -c1-2) ;; esac ;;
+    *) short=$(printf '%s' "$1" | cut -c1-2) ;;
+  esac
+}
+
+repo_of() {
+  r=$(mf "$1" 1)
+  echo "${r:-storytold/$1}"
+}
+
+# Whether version $1 is lower than $2 (both X.Y.Z; false when $2 is empty).
+below() {
+  [ -n "$2" ] && [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -n 1)" = "$1" ]
 }
 
 switch_to() {
@@ -114,7 +250,7 @@ switch_to() {
 fetch_icon() {
   [ -s "$3/app-icon.png" ] && return 0
   if curl -fsSL --retry 2 --connect-timeout 20 --max-time 60 --max-filesize 1048576 -o "$3/.app-icon.new" \
-       "$RAW/$1/v$2/assets/app-icon/hicolor/256x256/apps/ai.storyteller.$1.png" 2>/dev/null &&
+       "$RAW/$(repo_of "$1")/v$2/assets/app-icon/hicolor/256x256/apps/ai.storyteller.$1.png" 2>/dev/null &&
      [ "$(head -c 8 "$3/.app-icon.new" | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ] &&
      mv -f "$3/.app-icon.new" "$3/app-icon.png"; then
     return 0
@@ -199,22 +335,38 @@ layer_ready() {
   INJ=$dir/hosting/inject-translator.sh
 }
 
-# The startup timeout of app $1 from CRAFTSUITE_STARTUP_TIMEOUTS ("lightcraft=180000 ..."), as
-# an option for inject-translator.sh in TIMEOUT (empty: the translator's default). The injector
-# writes it into its block, so every run passes it, --check included. The injector of layers
-# before 0.2.0 has no such option and gets none.
+# The startup timeout of app $1, as an option for inject-translator.sh in TIMEOUT (empty: the
+# translator's default): its entry in CRAFTSUITE_STARTUP_TIMEOUTS ("lightcraft=180000 ..."), else
+# the startupTimeout the app list recommends. The injector writes it into its block, so every run
+# passes it, --check included. The injector of layers before 0.2.0 has no such option and gets
+# none.
 timeout_of() {
   TIMEOUT=
   grep -q -e '--startup-timeout' "$INJ" 2>/dev/null || return 0
+  ms=$(mf "$1" 3)
   for t in $STARTUP_TIMEOUTS; do
-    case $t in "$1="*) TIMEOUT=--startup-timeout=${t#*=} ;; esac
+    case $t in "$1="*) ms=${t#*=} ;; esac
   done
+  [ -z "$ms" ] || TIMEOUT=--startup-timeout=$ms
+}
+
+# Removes the translator from the web build in $2 (app $1), if it has one.
+remove_translator() {
+  [ -n "$INJ" ] && grep -q 'craftsuite-layer/core\.js' "$2/index.html" 2>/dev/null || return 0
+  sh "$INJ" -q --remove --app "$1" "$2" >/dev/null 2>&1
 }
 
 # Adds the translator to the web build in $3 (app $1, version $2), with the origins from
-# CRAFTSUITE_ALLOWED_ORIGINS. Returns 1 if the build must not be switched to.
+# CRAFTSUITE_ALLOWED_ORIGINS. Returns 1 if the build must not be switched to, and 2 for a version
+# older than the app list's minVersion: the layer's adapter does not handle it, so it is served
+# without the translator.
 add_translator() {
   [ -n "$INJ" ] || return 0
+  m=$(mf "$1" 2)
+  if below "$2" "$m"; then
+    remove_translator "$1" "$3"
+    return 2
+  fi
   timeout_of "$1"
   # shellcheck disable=SC2086 # TIMEOUT is empty or one word
   sh "$INJ" -c -q --app "$1" --app-version "$2" $TIMEOUT "$3" >/dev/null 2>&1 && return 0
@@ -235,36 +387,83 @@ add_translator() {
   return 0
 }
 
-# jq definitions for the canary runs in RUNS and the issues in $issues. A run passed if no canary
-# issue was open at its check time (at): the run opens or closes its issue in its last job, just
-# before it ends. A re-run passed only if no canary issue was open at any time from its creation
-# to then: its first attempt may have failed, and a re-run of failed jobs keeps the canary job's
-# earlier result.
-# shellcheck disable=SC2016 # jq variables, not the shell's
-CANARY_JQ='def open_during($from; $to): any($issues[]; (.created_at | fromdateiso8601) <= $to
-    and (.closed_at == null or (.closed_at | fromdateiso8601) > $from));
-  def passed($r): open_during(if $r.rerun then $r.start else $r.at end; $r.at) | not;'
+# GET $1 from the GitHub API and print it.
+gh_get() {
+  curl -fsS --retry 3 --connect-timeout 20 --max-time 60 -A craft-update -H 'Accept: application/vnd.github+json' "$1"
+}
 
-# Reads the layer's canary: its runs into RUNS and its issues into ISSUES, for the release choice,
-# and sets OPEN (an open canary issue), FAILED (the newest canary failure since the current layer
-# version came into use) and STALE (when the newest run is older than CANARY_STALE). A run of
-# canary.yml on main fetches the newest release of each app and tests the translators of the
-# layer's main branch against it; a failing run opens an issue labelled canary (or comments on the
-# open one), the next passing run closes it. Only runs that ended with success or failure count: a
-# cancelled one (a timeout, for example) tested nothing. RUNS holds them oldest first, in seconds:
-# start (the run's creation: every attempt and every job of a re-run started after it), end, the
-# check time at (a minute after the end, but not after the next run's start), and whether it is a
-# re-run. Whether a run passed is told by the issues, since a run also fails when only the
-# layer's look at the next Nextcloud release does.
+# The layer version each canary run tested, for the runs in $1 (reduced, see canary_check): the
+# LAYER_VERSION in translators/core.js at the run's commit, the translators the canary tests. Read
+# from raw.githubusercontent.com (no API request) and kept in state/canary-layers, one line
+# "<commit> <version>" per commit ("-" for one without such a file); a commit never changes.
+# Prints them as a JSON object; returns 1 if one cannot be read.
+canary_layers() {
+  cache=$STATE/canary-layers
+  shas=$(printf '%s' "$1" | jq -r '[ .[].sha | select(test("\\A[0-9a-f]{40}\\z")) ] | unique | .[]') || return 1
+  lines=
+  for s in $shas; do
+    ver=$(awk -v s="$s" '$1 == s { print $2; exit }' "$cache" 2>/dev/null)
+    if [ -z "$ver" ]; then
+      f=$(mktemp "$STATE/.core.XXXXXX") || return 1
+      code=$(curl -sS --retry 2 --connect-timeout 20 --max-time 60 --max-filesize 4194304 -A craft-update \
+        -o "$f" -w '%{http_code}' "$RAW/$LAYER_REPO/$s/translators/core.js" 2>/dev/null) || code=000
+      case $code in
+        200)
+          ver=$(sed -n "s/^.*const LAYER_VERSION = '\([0-9A-Za-z.+-]*\)'.*$/\1/p" "$f" | head -n 1)
+          [ -n "$ver" ] || { rm -f "$f"; return 1; }
+          ;;
+        404) ver= ;;
+        *) rm -f "$f"; return 1 ;;
+      esac
+      rm -f "$f"
+      ver=${ver:--}
+    fi
+    lines="$lines$s $ver
+"
+  done
+  printf '%s' "$lines" > "$cache.new" && mv -f "$cache.new" "$cache"
+  printf '%s' "$lines" | jq -Rnc '[ inputs | split(" ") | select(length == 2) | {(.[0]): .[1]} ] | add // {}'
+}
+
+# jq definitions for the release choice, on $runs (the counted runs, each with F, the apps it failed
+# for, "*" for all, and T, the versions its report says it tested; see canary_check) and $app.
+# shellcheck disable=SC2016 # jq variables, not the shell's
+CANARY_JQ='def sv: split(".") | map(tonumber);
+  def passed($r): any($r.F[]; . == "*" or . == $app) | not;'
+
+# Reads the layer's canary: its runs on main, the layer version each one tested, its issues
+# labelled canary and the reports in them. A run of canary.yml fetches the newest release of each
+# app and tests the translators of the layer's main branch against it; a failing run opens an issue
+# labelled canary (or comments on the open one) and gives it a label canary:<app> per app whose
+# tests failed; the next passing run comments and closes it. Every report (the issue's text, each
+# comment) ends with a line `canary-result {...}` naming the run, its attempt, the apps that failed
+# and the versions it tested (the layer's docs/hosting.md, Updates, step 4).
+#
+# A run counts only if it tested the pinned layer release: the translators on main change only
+# together with a layer release, and core.js at the run's commit names it (also on a release
+# commit before its tag). Runs of older or newer layer versions tested other translators. Of the
+# runs, only those that ended with success or failure count, and re-runs that ended cancelled; a
+# first attempt that was cancelled (a timeout, for example) tested nothing. A run that is queued
+# or running (also a re-run of an older one) counts as pending: its result is not known yet.
+#
+# RUNS gets the counted runs, oldest first, in seconds: start (the run's creation: every attempt
+# and every job of a re-run started after it), end, the check time at (a minute after the end,
+# but not after the next run's start), F (the apps it failed for, "*" for all) and T (the versions
+# its own report says it tested, if it has one). A failed run failed for the apps its own report
+# names, or for every app without such a report (or when it names none). A passed run failed for
+# the apps an earlier attempt's report names; if a canary issue was open at its check time (for a
+# re-run: at any time since its creation) and no report names an app, for every app. Only texts
+# the workflow wrote (github-actions[bot]) count: anybody may comment on a public issue.
+#
 # state/canary-since keeps one line "<layer version> <time>" per version that came into use;
-# removing the file confirms that earlier failures do not concern the layer. A failure is a
-# canary issue opened after that time, or one the first run after it did not pass (a failing run
-# comments on the open issue instead of opening a new one). The canary tests the layer's main
-# branch, so after a failure a later passing run does not show that the pinned layer handles the
-# new releases: they wait until another layer version is in use or the failure is confirmed, and
-# a failure once found counts until then (state/canary-failed: the issue, then the version and
-# time it belongs to). Returns 1 if the runs or the issues could not be read (CANARY_PART says
-# which).
+# removing the file confirms that earlier failures do not concern the layer. A failure for an app
+# is a counted run since then that failed for it. After a failure a later passing run does not
+# show that the pinned layer handles the app's new releases: they wait until another layer version
+# is in use or the failure is confirmed, and a failure once found counts until then
+# (state/canary-failed: the issue, the version and time it belongs to, the apps). Sets RUNS,
+# HORIZON (the oldest listed run when the list is full), OPEN_APPS and OPEN_URL (rule 1),
+# FAILED_APPS and FAILED_URL (rule 3), STALE. Returns 1 if a part could not be read (CANARY_PART
+# says which).
 canary_check() {
   since=$(awk -v v="$LAYER_VERSION" '$1 == v && $2 ~ /^[0-9]+$/ { s = $2 } END { print s }' "$STATE/canary-since" 2>/dev/null)
   if [ -z "$since" ]; then
@@ -273,64 +472,207 @@ canary_check() {
     rm -f "$STATE/canary-failed"
     log "layer: canary failures count from now on (layer $LAYER_VERSION)"
   fi
+  stored=
+  if [ "$(sed -n 2p "$STATE/canary-failed" 2>/dev/null)" = "$LAYER_VERSION $since" ]; then
+    stored=$(sed -n 3p "$STATE/canary-failed")
+    [ -n "$stored" ] || stored='*'
+  fi
+  # Each answer is reduced on the way in: the full ones are too large for jq's arguments.
   CANARY_PART=runs
-  json=$(curl -fsS --retry 3 --connect-timeout 20 --max-time 60 -A craft-update \
-    -H 'Accept: application/vnd.github+json' \
-    "$API/$LAYER_REPO/actions/workflows/canary.yml/runs?branch=main&status=completed&exclude_pull_requests=true&per_page=100") || return 1
-  RUNS=$(printf '%s' "$json" | jq -c 'if (.workflow_runs | type) == "array" then
-      [ .workflow_runs[] | select(.head_branch == "main" and .status == "completed"
-          and (.conclusion == "success" or .conclusion == "failure")
-          and (.created_at | type) == "string" and (.updated_at | type) == "string")
-        | {start: (.created_at | fromdateiso8601), end: (.updated_at | fromdateiso8601), conclusion,
-           rerun: ((.run_attempt // 1) > 1)} ]
-      | sort_by(.start)
-      | . as $r | [ range(length) as $i | $r[$i]
-          + {at: ([ $r[$i].end, ([ $r[$i].end + 60, ($r[$i + 1].start // ($r[$i].end + 60)) ] | min) ] | max)} ]
-    else error("not a list") end') && [ -n "$RUNS" ] || {
-    RUNS='[]'
-    return 1
-  }
+  j=$(gh_get "$API/$LAYER_REPO/actions/workflows/canary.yml/runs?branch=main&exclude_pull_requests=true&per_page=100") || return 1
+  # shellcheck disable=SC2016 # jq variables, not the shell's
+  runs=$(printf '%s' "$j" | jq -c --arg repo "$LAYER_REPO" 'if (.workflow_runs | type) == "array" then
+      [ .workflow_runs[] | select(.head_branch == "main" and (.event == "schedule" or .event == "workflow_dispatch")
+          and ((.head_repository.full_name? // $repo) | ascii_downcase) == ($repo | ascii_downcase)
+          and (.created_at | type) == "string" and (.updated_at | type) == "string" and (.id | type) == "number")
+        | {id, attempt: (.run_attempt // 1), sha: ((.head_sha // "") | tostring), start: (.created_at | fromdateiso8601),
+           end: (.updated_at | fromdateiso8601), status: ((.status // "") | tostring), conclusion: ((.conclusion // "") | tostring)} ]
+    else error("not a list") end') && [ -n "$runs" ] || return 1
+  page=$(printf '%s' "$j" | jq -r '[ .workflow_runs[] | .created_at | strings ] | "\(length) \(min // "-")"') || return 1
+  HORIZON=null
+  if [ "${page%% *}" -ge 100 ]; then
+    HORIZON=$(printf '%s' "${page#* }" | jq -R 'fromdateiso8601? // null')
+  fi
+  CANARY_PART="translator versions"
+  layers=$(canary_layers "$runs") && [ -n "$layers" ] || return 1
   CANARY_PART=issues
-  json=$(curl -fsS --retry 3 --connect-timeout 20 --max-time 60 -A craft-update \
-    -H 'Accept: application/vnd.github+json' "$API/$LAYER_REPO/issues?labels=canary&state=all&per_page=100") || return 1
-  ISSUES=$(printf '%s' "$json" | jq -c 'if type == "array" then [ .[] | select(.pull_request == null) | {state, html_url, created_at, closed_at} ] else error("not a list") end') &&
-    [ -n "$ISSUES" ] || {
-    ISSUES='[]'
-    return 1
-  }
-  OPEN=$(printf '%s' "$ISSUES" | jq -r '[ .[] | select(.state == "open") | .html_url ] | first // empty')
-  FAILED=$(jq -nr --argjson since "$since" --argjson runs "$RUNS" --argjson issues "$ISSUES" "$CANARY_JQ"'
-    ([ $runs[] | select(.start > $since) ] | first) as $r
-    | [ $issues[] | select((.created_at | fromdateiso8601) > $since
-        or ($r != null and (.created_at | fromdateiso8601) <= $r.at
-            and (.closed_at == null or (.closed_at | fromdateiso8601) > (if $r.rerun then $r.start else $r.at end)))) ]
-    | sort_by(.created_at) | last | .html_url // empty')
-  if [ -z "$FAILED" ] && [ "$(sed -n 2p "$STATE/canary-failed" 2>/dev/null)" = "$LAYER_VERSION $since" ]; then
-    FAILED=$(head -n 1 "$STATE/canary-failed")
+  j=$(gh_get "$API/$LAYER_REPO/issues?labels=canary&state=all&per_page=100") || return 1
+  # The reports of the runs, from the texts the workflow wrote: the issues' own and their comments.
+  # Each report is a line of its own; a failed list with anything but app ids stands for all apps.
+  # shellcheck disable=SC2016 # jq variables, not the shell's
+  REPORT_JQ='def bot: (.user.login? == "github-actions[bot]") and (.user.type? == "Bot");
+    def reports: strings | split("\n")[] | rtrimstr("\r") | capture("^`canary-result (?<j>\\{.*\\})`$")? | .j
+      | (try fromjson catch null) | select(type == "object" and (.run | type) == "number")
+      | {run, attempt: (if (.attempt | type) == "number" then .attempt else 0 end),
+         failed: (if (.failed | type) == "array" and all(.failed[]; type == "string" and test("^[a-z][a-z0-9]{0,31}$")) then .failed else ["*"] end),
+         tested: (if (.tested | type) == "object" and all(.tested[]; type == "string") then .tested else null end)};'
+  issues=$(printf '%s' "$j" | jq -c 'if type == "array" then [ .[] | select(.pull_request == null and (.created_at | type) == "string")
+      | {number, state, html_url, created_at, closed_at,
+         labels: [ .labels[]?.name? | strings | select(startswith("canary:")) | ltrimstr("canary:") | select(test("^[a-z][a-z0-9]{0,31}$")) ]} ]
+    else error("not a list") end') && [ -n "$issues" ] || return 1
+  reports=$(printf '%s' "$j" | jq -c "$REPORT_JQ"'[ .[] | select(.pull_request == null and bot) | .number as $n | .body | reports | . + {issue: $n} ]') &&
+    [ -n "$reports" ] || return 1
+  # Comments only for the runs that need a report beyond the issue's own text: failed runs and
+  # re-runs, from the oldest of them on.
+  from=$(printf '%s' "$runs" | jq -r '[ .[] | select(.conclusion == "failure" or .attempt > 1) | .start ] | min // empty | todate')
+  if [ -n "$from" ] && [ "$issues" != '[]' ]; then
+    CANARY_PART=comments
+    j=$(gh_get "$API/$LAYER_REPO/issues/comments?sort=created&direction=desc&per_page=100&since=$from") || return 1
+    nums=$(printf '%s' "$issues" | jq -c '[ .[].number ]')
+    more=$(printf '%s' "$j" | jq -c --argjson nums "$nums" "$REPORT_JQ"'if type == "array" then
+        [ .[] | select(bot) | ((.issue_url // "") | capture("/issues/(?<n>[0-9]+)$")? | .n | tonumber) as $n
+          | select(any($nums[]; . == $n)) | .body | reports | . + {issue: $n} ]
+      else error("not a list") end') && [ -n "$more" ] || return 1
+    reports=$(printf '%s\n%s' "$reports" "$more" | jq -sc 'add')
   fi
-  newest=$(jq -nr --argjson runs "$RUNS" --argjson issues "$ISSUES" "$CANARY_JQ"'
-    $runs | last // empty | "\(.start) \(.conclusion)" + (if .rerun then ", re-run" else "" end)
-      + (if passed(.) | not then ", canary issue open" elif .conclusion == "failure" then ", no canary issue" else "" end)')
-  if [ -z "$newest" ]; then
+  # A report seen once is kept (state/canary-reports) while its run is listed: a later page of 100
+  # comments may no longer have it.
+  # shellcheck disable=SC2016 # jq variables, not the shell's
+  kept=$(jq -cn '[ inputs ] | if length == 1 and (.[0] | type) == "array" then .[0]
+      | map(select(type == "object" and (.run | type) == "number" and (.attempt | type) == "number"
+          and (.issue | type) == "number" and (.failed | type) == "array" and all(.failed[]; type == "string")))
+    else [] end' "$STATE/canary-reports" 2>/dev/null) && [ -n "$kept" ] || kept='[]'
+  reports=$(printf '{"new":%s,"kept":%s,"runs":%s}' "$reports" "$kept" "$runs" | jq -c '[ .runs[].id ] as $ids
+      | (.new + .kept) | unique_by([.run, .attempt, .issue]) | map(select(.run as $r | any($ids[]; . == $r)))') || return 1
+  printf '%s\n' "$reports" > "$STATE/canary-reports.new" && mv -f "$STATE/canary-reports.new" "$STATE/canary-reports"
+  CANARY_PART=runs
+  # shellcheck disable=SC2016 # jq variables, not the shell's
+  stored=$(printf '%s' "$stored" | jq -Rsc 'split(" ") | map(select(length > 0))')
+  c=$(printf '{"runs":%s,"layers":%s,"issues":%s,"reports":%s,"stored":%s}' "$runs" "$layers" "$issues" "$reports" "$stored" |
+    jq -c --argjson since "$since" --arg lv "$LAYER_VERSION" --arg repo "$LAYER_REPO" '
+    .runs as $runs | .layers as $layers | .issues as $issues | .reports as $reports | .stored as $stored
+    | def sv: split(".") | map(tonumber);
+      def xyz: type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z");
+      def t: fromdateiso8601;
+      def apps: map(select(type == "string" and (. == "*" or test("\\A[a-z][a-z0-9]{0,31}\\z")))) | unique
+        | if any(.[]; . == "*") then ["*"] else . end;
+      def open_during($from; $to): any($issues[]; (.created_at | t) <= $to and (.closed_at == null or (.closed_at | t) > $from));
+    ($runs | map(. + {layer: ($layers[.sha] // "-"), pending: (.status != "completed"), rerun: (.attempt > 1)})) as $rs
+    | ([ $rs[] | select((.pending | not) and (.conclusion == "success" or .conclusion == "failure")) ] | sort_by(.start)
+        | . as $d | [ range(length) as $i | $d[$i]
+          + {at: ([ $d[$i].end, ([ $d[$i].end + 60, ($d[$i + 1].start // ($d[$i].end + 60)) ] | min) ] | max)} ]) as $done
+    # A re-run that ended otherwise (cancelled, timed out, ...) counts, and so does a first attempt
+    # that ended so with a report of its own; any other first attempt tested nothing.
+    | ([ $rs[] | . as $x | select(($x.pending | not) and $x.conclusion != "success" and $x.conclusion != "failure"
+        and ($x.rerun or any($reports[]; .run == $x.id and .attempt == $x.attempt))) | . + {at: .end} ]) as $cancelled
+    # F: the apps the run failed for. A re-run with an issue open during it and an earlier attempt
+    # without a known report may have failed for any app.
+    | ([ $done[], $cancelled[] ] | map(. as $x | [ $reports[] | select(.run == $x.id) ] as $reps
+        | ([ $reps[].failed[] ] | apps) as $u
+        | ([ $reps[] | select(.attempt == $x.attempt) ] | last) as $own
+        | open_during(if $x.rerun then $x.start else $x.at end; $x.at) as $wasopen
+        | ($x.rerun and $wasopen and (([ range(1; $x.attempt) ] - [ $reps[].attempt ]) | length) > 0) as $unexplained
+        | . + {F: (if $unexplained then ["*"]
+                   elif $x.conclusion == "failure" then (if $own != null and ($u | length) > 0 then $u else ["*"] end)
+                   elif ($u | length) > 0 then $u
+                   elif $x.conclusion != "success" then ["*"]
+                   elif ($reps | length) > 0 or ($wasopen | not) then []
+                   else ["*"] end),
+               T: (if ($own.tested | type) == "object" and ($own.tested | length) > 0 then $own.tested else null end)})) as $judged
+    | ([ $judged[], ($rs[] | select(.pending) | . + {F: [], T: null}) ] | sort_by(.start)) as $all
+    | [ $all[] | select(.layer == $lv) ] as $counted
+    | [ $counted[] | select(.pending | not) ] as $finished
+    | [ $finished[] | select(.start > $since and (.F | length) > 0) ] as $failruns
+    | ([ ($failruns[] | .F[]), $stored[] ] | apps) as $failed
+    | ([ $failruns[] as $x | $issues[] | select((.created_at | t) <= $x.at and (.closed_at == null or (.closed_at | t) >= $x.end)) ]
+        | sort_by(.created_at) | last | .html_url? // null) as $furl
+    | [ $issues[] | select(.state == "open") ] as $open
+    | ($judged | sort_by(.start) | [ .[] | select((.layer | xyz) and ($lv | xyz) and ((.layer | sv) > ($lv | sv))) ]) as $newer
+    | {runs: $counted,
+       failed: ($failed | join(" ")),
+       failed_url: ($furl // (if ($failruns | length) > 0 then "https://github.com/\($repo)/actions/runs/\($failruns | last | .id)" else null end) // ""),
+       open: ([ $open[] | . as $i | [ ($reports[] | select(.issue == $i.number) | .failed[]), $i.labels[] ]
+                | apps | if length == 0 then ["*"] else . end | .[] ] | apps | join(" ")),
+       open_url: ($open | sort_by(.created_at) | last | .html_url? // ""),
+       newest: ($finished | last | if . == null then "" else "\(.start) \(.conclusion)" + (if .rerun then ", re-run" else "" end)
+         + (if .F == ["*"] then ", failed for every app" elif (.F | length) > 0 then ", failed for \(.F | join(" "))" else "" end) end),
+       any: (($judged | length) > 0),
+       older: any($judged[]; (.layer | xyz) and ($lv | xyz) and ((.layer | sv) < ($lv | sv))),
+       newer: (if ($newer | length) == 0 then "" else "\($newer | map(.layer) | max_by(sv)) \($newer | first | .start)" end)}') || return 1
+  RUNS=$(printf '%s' "$c" | jq -c '.runs')
+  [ "$(printf '%s' "$c" | jq -r '.older')" != true ] || HORIZON=null
+  FAILED_APPS=$(printf '%s' "$c" | jq -r '.failed')
+  FAILED_URL=$(printf '%s' "$c" | jq -r '.failed_url')
+  [ -n "$FAILED_URL" ] || FAILED_URL=$(head -n 1 "$STATE/canary-failed" 2>/dev/null)
+  OPEN_APPS=$(printf '%s' "$c" | jq -r '.open')
+  OPEN_URL=$(printf '%s' "$c" | jq -r '.open_url')
+  newest=$(printf '%s' "$c" | jq -r '.newest')
+  newer=$(printf '%s' "$c" | jq -r '.newer')
+  NEWER=
+  if [ -n "$newer" ]; then
+    NEWER=${newer%% *}
+    log "layer: canary runs since $(date -d "@${newer#* }" '+%F %T') test a newer layer version than $LAYER_VERSION (the newest: $NEWER): releases that came out since wait until a newer layer version is in use (how-it-works.md, The canary)"
+  fi
+  if [ "$(printf '%s' "$c" | jq -r '.any')" != true ]; then
     STALE=none
-    return 0
-  fi
-  if [ $(( $(date +%s) - ${newest%% *} )) -gt "$CANARY_STALE" ]; then
-    STALE=$(date -d "@${newest%% *}" '+%F %T')
+  elif [ -n "$newest" ]; then
+    if [ $(( $(date +%s) - ${newest%% *} )) -gt "$CANARY_STALE" ]; then
+      STALE="the newest canary run of layer $LAYER_VERSION started $(date -d "@${newest%% *}" '+%F %T'), more than three days ago"
+    else
+      log "layer: newest canary run of layer $LAYER_VERSION started $(date -d "@${newest%% *}" '+%F %T') (${newest#* })"
+    fi
+  elif [ $(( $(date +%s) - since )) -gt "$CANARY_STALE" ]; then
+    STALE="no canary run has tested layer $LAYER_VERSION since it came into use $(date -d "@$since" '+%F %T'), more than three days ago"
   else
-    log "layer: newest canary run started $(date -d "@${newest%% *}" '+%F %T') (${newest#* })"
+    log "layer: no canary run has tested layer $LAYER_VERSION yet; new releases wait for one"
   fi
+}
+
+# The names of the apps in $1 as "A, B and C", with $2 for "and".
+names_of() {
+  out='' n=0 i=0
+  for a in $1; do n=$((n + 1)); done
+  for a in $1; do
+    i=$((i + 1))
+    app_info "$a"
+    if [ "$i" -eq 1 ]; then out=$name
+    elif [ "$i" -eq "$n" ]; then out="$out $2 $name"
+    else out="$out, $name"
+    fi
+  done
+  printf '%s' "$out"
+}
+
+# The canary hold of the layer version in use, from state/canary-failed: HURL and HAPPS (the
+# served apps it holds, "*" for all). Returns 1 without one.
+hold_info() {
+  [ -n "$LAYER_VERSION" ] && [ "$CANARY" != off ] && [ -s "$STATE/canary-failed" ] || return 1
+  case $(sed -n 2p "$STATE/canary-failed" 2>/dev/null) in "$LAYER_VERSION "*) ;; *) return 1 ;; esac
+  HURL=$(head -n 1 "$STATE/canary-failed" 2>/dev/null)
+  h=$(sed -n 3p "$STATE/canary-failed" 2>/dev/null)
+  HAPPS=$(served_of "${h:-*}")
+  [ -n "$HAPPS" ]
+}
+
+# The apps of $1 ("*" for all) that are in the app list.
+served_of() {
+  case " $1 " in *" * "*) echo "*"; return ;; esac
+  so=
+  for a in $1; do
+    case " $APPS " in *" $a "*) so="${so:+$so }$a" ;; esac
+  done
+  echo "$so"
+}
+
+# Why new releases of app $1 wait, or nothing: a hold for all apps, a canary failure for the app
+# since the layer came into use (rule 3), an open canary issue that names it (rule 1).
+hold_of() {
+  if [ -n "$HOLD" ]; then echo "$HOLD"; return; fi
+  case " $FAILED_APPS " in *" * "* | *" $1 "*) echo "canary failure"; return ;; esac
+  case " $OPEN_APPS " in *" * "* | *" $1 "*) echo "open canary issue" ;; esac
 }
 
 # shellcheck disable=SC1111 # typographic quotes in the texts of the start page
 start_page() {
   if [ "$LANGUAGE" = de ]; then
     when=$(date -r "$STATE/status" '+%d.%m.%Y um %H:%M' 2>/dev/null) || when="?"
-    tagline="Büro, Grafik, Foto, Video und PDF – direkt im Browser"
+    tagline="Büro, Grafik, Foto, Video, Audio und PDF – direkt im Browser"
     open="Öffnen"
     err="Die letzte Update-Prüfung hatte Fehler. Die Apps laufen in ihrer bisherigen Version weiter, Einzelheiten stehen im Log von craft-update."
     none="Noch ist keine App installiert; warum, steht im Log von craft-update."
     held="Neue App-Versionen werden zurückgehalten, weil der Canary-Test von nextcloud-craftsuite-layer fehlgeschlagen ist:"
+    held_some="Neue Versionen von @ werden zurückgehalten, weil der Canary-Test von nextcloud-craftsuite-layer bei ihnen fehlgeschlagen ist:"
+    and=und
     tips="So landet die Datei wieder in Nextcloud"
     intro="Speichern ist immer ein Download. Im Speichern-Dialog die Originaldatei im synchronisierten Ordner wählen und ersetzen; in Nextcloud bleibt die vorige Fassung unter „Versionen“."
     nc="Direkt aus Nextcloud: im Menü einer Datei „In … öffnen“ wählen. Speichern legt die Datei dann ohne Download in Nextcloud ab."
@@ -342,11 +684,13 @@ start_page() {
     footer="Updates täglich um $(esc "${CRAFT_UPDATE_TIME:-07:00}") Uhr · zuletzt geprüft am $when Uhr"
   else
     when=$(date -r "$STATE/status" '+%Y-%m-%d %H:%M' 2>/dev/null) || when="?"
-    tagline="Office, graphics, photo, video and PDF – right in the browser"
+    tagline="Office, graphics, photo, video, audio and PDF – right in the browser"
     open="Open"
     err="The last update check had errors. The apps keep running in their current version; the log of craft-update has the details."
     none="No app is installed yet; the log of craft-update says why."
     held="New app versions are held back because the canary test of nextcloud-craftsuite-layer failed:"
+    held_some="New versions of @ are held back because the canary test of nextcloud-craftsuite-layer failed for them:"
+    and=and
     tips="Getting the file back into your folder"
     intro="Saving is always a download. In the save dialog, choose the original file in your synced folder and replace it; a synced cloud folder usually keeps the previous version."
     nc="Straight from Nextcloud: choose “Open in …” in a file's menu. Saving then stores the file in Nextcloud, without a download."
@@ -387,9 +731,13 @@ header p{margin:6px 0 0;color:var(--mut);font-size:clamp(1rem,2vw,1.15rem)}
 .nc{padding:9px 16px;border:1px solid var(--line);border-radius:99px;background:var(--card);box-shadow:var(--sh);color:inherit;font-weight:600;font-size:.9375rem;text-decoration:none;white-space:nowrap}
 .nc:hover{border-color:color-mix(in srgb,#2f7bf5 45%,var(--line))}
 .apps{list-style:none;margin:0;padding:0;display:grid;gap:18px}
-.pdfcraft{--c:#12a58a}.photocraft{--c:#2f7bf5}.vectorcraft{--c:#e8573f}.designcraft{--c:#7bb51c}
-.wordcraft{--c:#3d5bd9}.gridcraft{--c:#1e9e57}.deckcraft{--c:#f0761e}.cadcraft{--c:#1a9fd5}
-.lightcraft{--c:#eca312}.filmcraft{--c:#8b5cf6}.effectcraft{--c:#e0409a}
+HTML
+    # One colour per app, from the app list (checked there: an id and #rrggbb).
+    for a in $APPS; do
+      app_info "$a"
+      [ -z "$color" ] || printf '.%s{--c:%s}\n' "$a" "$color"
+    done
+    cat <<'HTML'
 .app{display:flex;align-items:center;gap:16px;height:100%;padding:12px;border:1px solid var(--line);border-radius:22px;background:var(--card);box-shadow:var(--sh);color:inherit;text-decoration:none;-webkit-tap-highlight-color:transparent;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
 .art{flex:none;display:grid;place-items:center;width:96px;height:96px;border-radius:16px;background:radial-gradient(circle at 50% 38%,color-mix(in srgb,var(--c) 34%,var(--art)),color-mix(in srgb,var(--c) var(--mix),var(--art)) 70%)}
 .ico{display:block;width:72px;height:72px;border-radius:22%;filter:drop-shadow(0 10px 16px color-mix(in srgb,var(--c) 45%,transparent));transition:transform .25s cubic-bezier(.2,.8,.2,1.2)}
@@ -444,14 +792,21 @@ HTML
     printf '<div><h1>Craft</h1><p>%s</p></div></div>\n%s\n</header>\n<main>\n' "$tagline" "$link"
     any=
     for a in $APPS; do any=$any$(version_of "$a"); done
-    if [ -z "$any" ]; then
+    if [ -z "$any" ] && { [ -n "$APPS" ] || [ -z "$(installed_apps)" ]; }; then
       printf '<p class="err">%s</p>\n' "$none"
     elif grep -q '^ERROR' "$STATE/status" 2>/dev/null; then
       printf '<p class="err">%s</p>\n' "$err"
     fi
-    if [ -n "$INJ" ] && [ "$CANARY" != off ] && [ -s "$STATE/canary-failed" ]; then
-      read -r hurl < "$STATE/canary-failed"
-      printf '<p class="err">%s <a href="%s">%s</a></p>\n' "$held" "$(esc "$hurl")" "$(esc "$hurl")"
+    if [ -n "$INJ" ] && hold_info; then
+      case $HAPPS in
+        '*') htext=$held ;;
+        *) htext="${held_some%%@*}$(esc "$(names_of "$HAPPS" "$and")")${held_some#*@}" ;;
+      esac
+      if [ -n "$HURL" ]; then
+        printf '<p class="err">%s <a href="%s">%s</a></p>\n' "$htext" "$(esc "$HURL")" "$(esc "$HURL")"
+      else
+        printf '<p class="err">%s</p>\n' "${htext%:}."
+      fi
     fi
     echo '<ul class="apps">'
     for a in $APPS; do
@@ -461,10 +816,10 @@ HTML
       if [ -s "$WWW/$a/app-icon.png" ]; then
         ico="<img class=\"ico\" src=\"$a/app-icon.png\" alt=\"\">"
       else
-        ico="<svg class=\"ico\" viewBox=\"0 0 64 64\" aria-hidden=\"true\"><rect x=\".75\" y=\".75\" width=\"62.5\" height=\"62.5\" rx=\"14\"/><text x=\"32\" y=\"41.5\">$short</text></svg>"
+        ico="<svg class=\"ico\" viewBox=\"0 0 64 64\" aria-hidden=\"true\"><rect x=\".75\" y=\".75\" width=\"62.5\" height=\"62.5\" rx=\"14\"/><text x=\"32\" y=\"41.5\">$(esc "$short")</text></svg>"
       fi
       printf '<li><a class="app %s" href="%s/"><span class="art">%s</span><span class="body"><span class="top"><span class="name">%s</span><span class="ver">%s</span></span><span class="desc">%s</span><span class="go">%s <i>→</i></span></span></a></li>\n' \
-        "$a" "$a" "$ico" "$name" "$v" "$text" "$open"
+        "$a" "$a" "$ico" "$(esc "$name")" "$(esc "$v")" "$(esc "$text")" "$open"
     done
     echo '</ul>'
     printf '<details class="tips">\n<summary><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 20h16"/></svg>%s</summary>\n<div class="tb">\n' "$tips"
@@ -479,9 +834,11 @@ HTML
 update_app() {
   app=$1
   old=$(version_of "$app")
+  repo=$(repo_of "$app")
+  minver=$(mf "$app" 2)
   json=$(curl -fsS --retry 3 --connect-timeout 20 --max-time 120 -A craft-update \
-    -H 'Accept: application/vnd.github+json' "$API/storytold/$app/releases?per_page=30") || {
-    log "$app: ERROR - cannot list the releases of storytold/$app (GitHub not reachable, rate limit reached, or no such repository)"
+    -H 'Accept: application/vnd.github+json' "$API/$repo/releases?per_page=30") || {
+    log "$app: ERROR - cannot list the releases of $repo (GitHub not reachable, rate limit reached, or no such repository)"
     return 1
   }
   now=$(date +%s)
@@ -496,50 +853,97 @@ update_app() {
   esac
   canary=off
   [ -n "$INJ" ] && [ "$CANARY" != off ] && canary=on
-  # Without the runs no release counts as tested; the hold keeps them all back, and the choice
+  # An app that the app list of the pinned layer does not have, its canary does not test.
+  if [ "$canary" = on ] && [ "$MANIFEST_STATE" = ok ] && ! in_manifest "$app"; then
+    canary=off
+    log "$app: not in the app list of layer $LAYER_VERSION, which does not test it: its releases are taken by age alone"
+  fi
+  hold=$(hold_of "$app")
+  # Without the canary no release counts as tested; the hold keeps them all back, and the choice
   # without the canary only names the release that waits.
-  [ "$HOLD" = "canary runs not readable" ] && canary=off
-  # The newest release (by version) that is MIN_AGE old (counted from its last upload), newer than
-  # the installed and the blocked version, and has a web build. With the canary check on, also:
-  # the first canary run created after its last upload has ended, no release of the app came out
-  # before that run ended (so the run tested this one), and the run passed. A release that was not
-  # the newest during its first run is never taken, and neither is one whose first run did not
-  # pass: later runs test the layer's main branch, not the pinned layer. The app's next release
-  # that passes its own first run is taken.
-  pick=$(printf '%s' "$json" | jq -r --arg app "$app" --argjson now "$now" --argjson minage "$MIN_AGE" \
-      --arg old "$old" --arg blocked "$blocked" --arg canary "$canary" \
-      --argjson runs "$RUNS" --argjson issues "$ISSUES" "$CANARY_JQ"'
-    def sv: split(".") | map(tonumber);
-    [ .[] | select(.draft == false and .prerelease == false and .published_at != null) ] as $all
+  case $hold in "canary "*" not readable") canary=off ;; esac
+  # The newest release (by version) that is MIN_AGE old (counted from its last upload), not below
+  # the app list's minVersion, newer than the installed and the blocked version, and has a web
+  # build. With the canary check on, also: the first canary run of the pinned layer created after
+  # its last upload has ended and tested it (no release of the app came out before that run ended,
+  # it was the highest version out by then, and the run's own report names it if it has one), and
+  # the run passed for the app. A release whose first such run did not pass, or did not test it,
+  # is never taken: a later passing run does not make up for it. The app's next release that
+  # passes its own first run is taken. When the list of runs is full, a release older than its
+  # oldest run has no known first run and is not taken either.
+  pick=$(printf '{"runs":%s,"releases":%s}' "$RUNS" "$json" | jq -r --arg app "$app" --argjson now "$now" --argjson minage "$MIN_AGE" \
+      --arg old "$old" --arg blocked "$blocked" --arg minver "$minver" --arg canary "$canary" --arg lv "$LAYER_VERSION" \
+      --argjson horizon "$HORIZON" "$CANARY_JQ"'
+    .runs as $runs | .releases
+    | [ .[] | select(.draft == false and .prerelease == false and .published_at != null) ] as $all
     | [ $all[] | .published_at | fromdateiso8601 ] as $times
     | [ $all[]
-      | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+      | select(.tag_name | test("\\Av[0-9]+\\.[0-9]+\\.[0-9]+\\z"))
       | (.tag_name | ltrimstr("v")) as $v
       | (.published_at | fromdateiso8601) as $pub
       | select($old == "" or ($v | sv) > ($old | sv))
       | select($blocked == "" or ($v | sv) > ($blocked | sv))
+      | select($minver == "" or ($v | sv) >= ($minver | sv))
       | (.assets | map(select(.name == ($app + "-web-" + $v + ".zip"))) | first) as $z
       | (.assets | map(select(.name == "SHA256SUMS.txt")) | first) as $s
       | select($z != null and $s != null)
       | ([.published_at, $z.updated_at, $s.updated_at] | map(select(. != null) | fromdateiso8601) | max) as $p
-      | select($p <= $now - $minage)
       | ([ $times[] | select(. > $pub) ] | min) as $next
-      | ([ $runs[] | select(.start > $p) ] | first) as $r
-      | select($canary != "on" or ($r != null and ($next == null or $next > $r.end) and passed($r)))
-      | [$v, $z.name, $z.browser_download_url, ($z.digest // "-"), $s.browser_download_url] ]
-    | max_by(.[0] | sv) // empty | join("|")') || {
+      | def tested($x): ($next == null or $next > $x.end)
+          and ([ $all[] | select((.published_at | fromdateiso8601) <= $x.end) | .tag_name | ltrimstr("v")
+                 | select(test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z")) ] | max_by(sv)) == $v
+          and ($x.T == null or ($x.T[$app] // null) == $v);
+        ([ $runs[] | select(.start > $p) ] | first) as $r
+      | [$v, $z.name, $z.browser_download_url, ($z.digest // "-"), $s.browser_download_url,
+         (if $p > $now - $minage then "wait|it is younger than CRAFT_MIN_AGE_HOURS"
+          elif $canary != "on" then "ok"
+          elif $horizon != null and $p < $horizon then "never|its first canary run is no longer among the last 100"
+          elif $r == null then "wait|no canary run of layer \($lv) after it yet"
+          elif $r.pending then "wait|its first canary run of layer \($lv) has not ended yet"
+          elif (tested($r) | not) then "never|its first canary run of layer \($lv) did not test it"
+          elif (passed($r) | not) then "never|its first canary run of layer \($lv) failed for it"
+          else "ok" end)] ]
+    | ([ .[] | select(.[5] == "ok") ] | max_by(.[0] | sv)) as $ok
+    | if $ok != null then $ok[0:5] | join("|")
+      elif length > 0 then max_by(.[0] | sv) | "-|\(.[0])|\(.[5])"
+      else empty end') || {
     log "$app: ERROR - unreadable answer from GitHub"
     return 1
   }
+  case $pick in
+    -\|*)
+      why=${pick#-|}
+      wv=${why%%|*}
+      why=${why#*|}
+      pick=
+      ;;
+    *) why='' wv='' ;;
+  esac
   if [ -z "$pick" ]; then
+    case $why in
+      wait\|*) note=" ($wv: ${why#wait|})" ;;
+      never\|*) note=" ($wv: ${why#never|}; the app's next release that passes its first run comes, or take $wv now: operations.md, Update now)" ;;
+      *) note= ;;
+    esac
     if [ -n "$old" ]; then
       fetch_icon "$app" "$old" "$REL/$app-$old" || log "$app: no icon for $old, the start page shows a letter tile"
-      log "$app: $old stays, no newer release qualifies yet"
+      log "$app: $old stays, no newer release qualifies yet$note"
       return 0
     fi
-    some=$(printf '%s' "$json" | jq --arg app "$app" '[ .[] | select(.draft == false and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) | (.tag_name | ltrimstr("v")) as $v | select(any(.assets[]; .name == ($app + "-web-" + $v + ".zip")) and any(.assets[]; .name == "SHA256SUMS.txt")) ] | length') || some=0
-    if [ "${some:-0}" -gt 0 ]; then
-      log "$app: not installed yet, no release qualifies yet; a later run takes one"
+    # shellcheck disable=SC2016 # jq variables, not the shell's
+    some=$(printf '%s' "$json" | jq -r --arg app "$app" --arg minver "$minver" 'def sv: split(".") | map(tonumber);
+      [ .[] | select(.draft == false and (.tag_name | test("\\Av[0-9]+\\.[0-9]+\\.[0-9]+\\z"))) | (.tag_name | ltrimstr("v")) as $v
+        | select(any(.assets[]; .name == ($app + "-web-" + $v + ".zip")) and any(.assets[]; .name == "SHA256SUMS.txt"))
+        | if $minver == "" or ($v | sv) >= ($minver | sv) then 1 else 0 end ] | "\(length) \(add // 0)"') || some="0 0"
+    if [ "${some%% *}" -gt 0 ] && [ "${some#* }" -eq 0 ]; then
+      log "$app: not installed yet, no release from $minver on yet (the oldest that layer $LAYER_VERSION handles, its app list)"
+      return 0
+    fi
+    if [ "${some%% *}" -gt 0 ]; then
+      case $why in
+        never\|*) log "$app: not installed yet, no release qualifies yet$note" ;;
+        *) log "$app: not installed yet, no release qualifies yet; a later run takes one$note" ;;
+      esac
       return 0
     fi
     log "$app: ERROR - no release v<version> with $app-web-<version>.zip and SHA256SUMS.txt found"
@@ -551,15 +955,15 @@ EOF
   case $ver in
     '' | *[!0-9A-Za-z.+-]*) log "$app: ERROR - unexpected version '$ver'"; return 1 ;;
   esac
-  if [ -n "$HOLD" ]; then
+  if [ -n "$hold" ]; then
     if [ -z "$old" ]; then
-      log "$app: ERROR - $ver not installed: $HOLD"
-      return 1
+      log "$app: not installed yet, $ver waits ($hold)"
+    else
+      log "$app: $ver held back ($hold), $old stays"
     fi
-    log "$app: $ver held back ($HOLD), $old stays"
     return 0
   fi
-  base="https://github.com/storytold/$app/releases/download/v$ver/"
+  base="https://github.com/$repo/releases/download/v$ver/"
   if [ "$url" != "$base$name" ] || [ "$sums" != "${base}SHA256SUMS.txt" ]; then
     log "$app: ERROR - unexpected download address for $ver"
     return 1
@@ -656,7 +1060,13 @@ rollback() {
     return 1
   fi
   layer_ready || log "$app: layer not available, $prev keeps the translator it has"
-  add_translator "$app" "$prev" "$REL/$app-$prev" || log "$app: $prev runs without an up-to-date translator"
+  [ -z "$INJ" ] || load_manifest "${INJ%/hosting/*}"
+  add_translator "$app" "$prev" "$REL/$app-$prev"
+  case $? in
+    0) ;;
+    2) log "$app: $prev is older than $(mf "$app" 2), the oldest release layer $LAYER_VERSION handles (its app list): it runs without the Nextcloud integration" ;;
+    *) log "$app: $prev runs without an up-to-date translator" ;;
+  esac
   switch_to "$app" "$prev" || { log "$app: ERROR - switching failed"; return 1; }
   echo "$now" > "$STATE/$app.blocked"
   rm -f "$STATE/$app.previous"
@@ -667,16 +1077,32 @@ case ${1:-} in
   "") ;;
   --status)
     dir=$LAYERS/craftsuite-layer-hosting-$LAYER_VERSION
-    [ -n "$LAYER_VERSION" ] && [ -f "$dir/hosting/inject-translator.sh" ] && INJ=$dir/hosting/inject-translator.sh
-    for a in $APPS; do
+    if [ -n "$LAYER_VERSION" ] && [ -f "$dir/hosting/inject-translator.sh" ] &&
+       [ "$(cat "$LAYERS/.craftsuite-layer-hosting-$LAYER_VERSION.verified" 2>/dev/null)" = "$LAYER_REPO $LAYER_SHA256" ]; then
+      INJ=$dir/hosting/inject-translator.sh
+      load_manifest "$dir"
+    fi
+    resolve_apps quiet
+    shown=
+    for a in $APPS $(installed_apps); do
+      case " $shown " in *" $a "*) continue ;; esac
+      shown="$shown $a"
       v=$(version_of "$a")
       nc=-
-      if [ -n "$v" ] && [ -n "$INJ" ]; then
+      [ -n "$v" ] && [ -n "$LAYER_VERSION" ] && [ -z "$INJ" ] && nc='? (the bundle of layer '"$LAYER_VERSION"' is not here yet)'
+      m=$(mf "$a" 2)
+      if [ -n "$v" ] && [ -n "$INJ" ] && below "$v" "$m"; then
+        nc="- (older than $m, the oldest the layer handles)"
+      elif [ -n "$v" ] && [ -n "$INJ" ]; then
         timeout_of "$a"
         # shellcheck disable=SC2086 # TIMEOUT is empty or one word
         if sh "$INJ" -c -q --app "$a" --app-version "$v" $TIMEOUT "$REL/$a-$v" >/dev/null 2>&1; then nc=yes; else nc=no; fi
       fi
-      echo "$a: ${v:--} (previous $(cat "$STATE/$a.previous" 2>/dev/null || echo -), blocked $(cat "$STATE/$a.blocked" 2>/dev/null || echo -), Nextcloud $nc)"
+      case " $APPS " in
+        *" $a "*) note= ;;
+        *) note=", not in the app list" ;;
+      esac
+      echo "$a: ${v:--} (previous $(cat "$STATE/$a.previous" 2>/dev/null || echo -), blocked $(cat "$STATE/$a.blocked" 2>/dev/null || echo -), Nextcloud $nc$note)"
     done
     if [ -z "$LAYER_VERSION" ]; then
       echo "layer: off"
@@ -685,19 +1111,24 @@ case ${1:-} in
     else
       echo "layer: $LAYER_VERSION (not downloaded yet)"
     fi
-    if [ -n "$LAYER_VERSION" ] && [ "$CANARY" != off ] && [ -s "$STATE/canary-failed" ]; then
-      read -r hurl < "$STATE/canary-failed"
-      echo "canary hold: the canary failed ($hurl) since layer $LAYER_VERSION came into use; new releases wait"
+    if hold_info; then
+      case $HAPPS in
+        '*') echo "canary hold: the canary failed (${HURL:-?}) since layer $LAYER_VERSION came into use; new releases wait" ;;
+        *) echo "canary hold: the canary failed for $HAPPS (${HURL:-?}) since layer $LAYER_VERSION came into use; their new releases wait" ;;
+      esac
     fi
     cat "$STATE/status" 2>/dev/null
     exit 0
     ;;
   --rollback)
-    # shellcheck disable=SC2086 # the list is split on purpose
-    case " $APPS " in
-      *" ${2:-} "*) [ -n "${2:-}" ] || { echo "Usage: craft-update --rollback APP" >&2; exit 2; } ;;
-      *) echo "Usage: craft-update --rollback <$(echo $APPS | tr ' ' '|')>" >&2; exit 2 ;;
-    esac
+    if [ -z "${2:-}" ] || ! is_id "$2"; then
+      echo "Usage: craft-update --rollback APP" >&2
+      exit 2
+    fi
+    if [ -z "$(version_of "$2")" ]; then
+      echo "craft-update: $2 is not installed; installed: $(installed_apps | tr '\n' ' ')" >&2
+      exit 2
+    fi
     ;;
   *) echo "Usage: craft-update [--status | --rollback APP]" >&2; exit 2 ;;
 esac
@@ -717,6 +1148,7 @@ trap 'exit 1' HUP INT PIPE TERM
 if [ "${1:-}" = "--rollback" ]; then
   rollback "$2"
   rc=$?
+  resolve_apps quiet
   start_page
   exit $rc
 fi
@@ -727,12 +1159,37 @@ FAILED=keep
 if ! layer_ready; then
   errors=$((errors + 1))
   HOLD="layer not available"
-elif [ -n "$INJ" ] && [ "$CANARY" != off ]; then
+  last_manifest
+elif [ -n "$INJ" ]; then
+  load_manifest "${INJ%/hosting/*}"
+  case $MANIFEST_STATE in
+    ok)
+      printf '%s\n' "$MANIFEST" > "$STATE/app-list.new" && mv -f "$STATE/app-list.new" "$STATE/app-list"
+      ;;
+    unusable)
+      errors=$((errors + 1))
+      log "layer: ERROR - $MANIFEST_NOTE: new releases wait, and the translators stay as they are"
+      HOLD="app list not readable"
+      last_manifest
+      ;;
+    missing)
+      log "layer: $MANIFEST_NOTE: no names, colours, startup timeouts or oldest releases from it; set CRAFTSUITE_STARTUP_TIMEOUTS where needed (configuration.md)"
+      ;;
+  esac
+  if [ -n "$MANIFEST_BAD" ]; then
+    errors=$((errors + 1))
+    log "layer: ERROR - entries of the app list of layer $LAYER_VERSION (apps.json) are invalid, their new releases wait: $MANIFEST_BAD"
+  fi
+fi
+resolve_apps
+errors=$((errors + LIST_ERRORS))
+if [ -n "$INJ" ] && [ "$CANARY" != off ]; then
   if ! canary_check; then
     errors=$((errors + 1))
     log "layer: ERROR - cannot read the canary $CANARY_PART of $LAYER_REPO, new releases wait"
-    HOLD="canary $CANARY_PART not readable"
+    HOLD=${HOLD:-"canary $CANARY_PART not readable"}
   else
+    FAILED=$FAILED_APPS
     case $STALE in
       '') ;;
       none)
@@ -741,29 +1198,74 @@ elif [ -n "$INJ" ] && [ "$CANARY" != off ]; then
         ;;
       *)
         errors=$((errors + 1))
-        log "layer: ERROR - the newest canary run of $LAYER_REPO started $STALE, more than three days ago: releases that came out since wait for a run (how-it-works.md, The canary)"
+        if [ -n "$NEWER" ]; then
+          log "layer: ERROR - $STALE; runs since then test a newer layer version (the newest: $NEWER): new releases wait until a newer one is in use (operations.md, Upgrading nextcloud-craftsuite-layer)"
+        else
+          log "layer: ERROR - $STALE: releases that came out since wait for a run (how-it-works.md, The canary)"
+        fi
         ;;
     esac
-    if [ -n "$FAILED" ]; then
+    # A hold for apps that are not served here holds nothing: a log line, no error.
+    held=$(served_of "$FAILED_APPS")
+    if [ "$held" = '*' ]; then
       errors=$((errors + 1))
-      log "layer: ERROR - the canary failed ($FAILED) since layer $LAYER_VERSION came into use: new releases wait until another layer version is in use, or you confirm that the failure does not concern it (operations.md, The canary hold)"
-      HOLD="canary failure"
-    elif [ -n "$OPEN" ]; then
-      log "layer: the canary reports a failure ($OPEN), new releases wait while the issue is open"
-      HOLD="open canary issue"
+      log "layer: ERROR - the canary failed for every app ($FAILED_URL) since layer $LAYER_VERSION came into use: new releases wait until another layer version is in use, or you confirm that the failure does not concern it (operations.md, The canary hold)"
+    elif [ -n "$held" ]; then
+      errors=$((errors + 1))
+      log "layer: ERROR - the canary failed for $held ($FAILED_URL) since layer $LAYER_VERSION came into use: their new releases wait until another layer version is in use, or you confirm that the failure does not concern it (operations.md, The canary hold)"
+    elif [ -n "$FAILED_APPS" ]; then
+      log "layer: the canary failed for $FAILED_APPS ($FAILED_URL) since layer $LAYER_VERSION came into use; none of them is served here"
+    fi
+    held=$(served_of "$OPEN_APPS")
+    if [ "$held" = '*' ]; then
+      log "layer: the canary reports a failure for every app ($OPEN_URL), new releases wait while the issue is open"
+    elif [ -n "$held" ]; then
+      log "layer: the canary reports a failure for $held ($OPEN_URL), their new releases wait while the issue is open"
     fi
   fi
 fi
 case $FAILED in
   keep) ;;
   '') rm -f "$STATE/canary-failed" ;;
-  *) printf '%s\n%s\n' "$FAILED" "$LAYER_VERSION $since" > "$STATE/canary-failed" ;;
+  *) printf '%s\n%s\n%s\n' "$FAILED_URL" "$LAYER_VERSION $since" "$FAILED" > "$STATE/canary-failed" ;;
 esac
 for a in $APPS; do
+  case " $BAD_IDS " in
+    *" $a "*)
+      v=$(version_of "$a")
+      log "$a: ERROR - its entry in the app list of layer $LAYER_VERSION is invalid: ${v:-nothing} stays, without changes"
+      errors=$((errors + 1))
+      continue
+      ;;
+  esac
   update_app "$a" || errors=$((errors + 1))
   v=$(version_of "$a")
-  if [ -n "$v" ] && ! add_translator "$a" "$v" "$REL/$a-$v"; then
-    errors=$((errors + 1))
+  # Without a usable app list nothing changes, the translators included.
+  [ -n "$v" ] && [ "$MANIFEST_STATE" != unusable ] || continue
+  add_translator "$a" "$v" "$REL/$a-$v"
+  case $? in
+    0) ;;
+    2)
+      log "$a: ERROR - $v is older than $(mf "$a" 2), the oldest release layer $LAYER_VERSION handles (its app list): it is served without the Nextcloud integration until a newer release is taken"
+      errors=$((errors + 1))
+      ;;
+    *) errors=$((errors + 1)) ;;
+  esac
+done
+# Apps that are served but not in the list: left out by CRAFT_APPS, or no longer in the layer's app
+# list, whose translator no longer fits (it is removed).
+for a in $(installed_apps); do
+  case " $APPS " in *" $a "*) continue ;; esac
+  v=$(version_of "$a")
+  case " $DEL " in
+    *" $a "*) dropped= ;;
+    *) dropped=1 ;;
+  esac
+  if [ -n "$AUTO" ] && [ "$MANIFEST_STATE" = ok ] && [ -n "$dropped" ] && ! in_manifest "$a"; then
+    remove_translator "$a" "$REL/$a-$v"
+    log "$a: $v is served, but the app list of layer $LAYER_VERSION no longer has it: no updates and no Nextcloud integration (operations.md, Removing an app)"
+  else
+    log "$a: $v is served but not in the app list (CRAFT_APPS), so it gets no updates (operations.md, Removing an app)"
   fi
 done
 if [ "$errors" -eq 0 ]; then
