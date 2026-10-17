@@ -29,11 +29,13 @@ YAML file and no `.env`, so the settings are filled into the file before it is p
 3. **Render the YAML:**
 
    ```sh
-   (umask 077; sh tools/render-compose.sh .env > compose.rendered.yaml)
+   (umask 077; sh tools/render-compose.sh --compact .env > compose.rendered.yaml)
    ```
 
-   It needs only `sh` and `awk`, and it prints nothing but an error if a required setting is
-   missing or malformed.
+   It needs only `sh`, `awk`, `gzip` and `base64`, and it prints nothing but an error if a
+   required setting is missing or malformed. TrueNAS refuses a YAML of more than 64 KiB, and the
+   updater alone is larger, so `--compact` puts it in compressed (about 44 KB in all); the
+   container unpacks it at start, byte for byte the same script.
 4. **Install:** *Apps* → *Discover Apps* → the three-dot menu → *Install via YAML*, name `craft`,
    paste the whole content of `compose.rendered.yaml`, *Save*. TrueNAS pulls the images and builds
    the updater. Then delete `compose.rendered.yaml`: it contains your secrets.

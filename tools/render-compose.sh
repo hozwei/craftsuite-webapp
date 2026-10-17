@@ -2,7 +2,7 @@
 # render-compose.sh: print compose.yaml with the settings from .env filled in, for tools that take
 # a single YAML file and no .env file, such as TrueNAS SCALE custom apps (docs/truenas.md).
 #
-#   (umask 077; sh tools/render-compose.sh [ENV_FILE [COMPOSE_FILE]] > compose.rendered.yaml)
+#   (umask 077; sh tools/render-compose.sh [--compact] [ENV_FILE [COMPOSE_FILE]] > compose.rendered.yaml)
 #
 # ENV_FILE defaults to .env and COMPOSE_FILE to compose.yaml, both next to this tools/ folder.
 # It fills in ${VAR}, ${VAR:-default}, ${VAR-default}, ${VAR:?message} and ${VAR?message} the
@@ -11,13 +11,23 @@
 # value are removed, a " #" starts a comment in an unquoted value, references to other variables
 # are not expanded; put a value with a backslash in single quotes. Nothing is printed when a
 # setting is missing or malformed. The output holds your secrets: delete it after use.
+#
+# --compact carries the updater compressed (gzip, then base64), for a UI that takes only so much
+# in one go: TrueNAS SCALE refuses a YAML of more than 64 KiB. The container unpacks it at start;
+# the script it runs is the same, byte for byte.
 set -eu
 top=$(cd "$(dirname "$0")/.." && pwd)
+compact=
+if [ "${1:-}" = --compact ]; then
+  compact=1
+  shift
+fi
 env_file=${1:-$top/.env}
 compose_file=${2:-$top/compose.yaml}
 [ -f "$env_file" ] || { echo "render-compose: no such file: $env_file" >&2; exit 2; }
 [ -f "$compose_file" ] || { echo "render-compose: no such file: $compose_file" >&2; exit 2; }
 
+render() {
 awk -v env_file="$env_file" -v sq="'" '
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 function yaml(s) { gsub(/\\/, "&&", s); gsub(/"/, "\\\"", s); gsub(/\$/, "$$", s); return s }
@@ -87,3 +97,20 @@ END {
   if (err) exit 1
   for (i = 1; i <= count; i++) print lines[i]
 }' "$compose_file"
+}
+
+if [ -z "$compact" ]; then
+  render
+  exit
+fi
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+render > "$tmp"
+start=$(grep -nx "        cat > /tmp/bin/craft-update <<'SCRIPT'" "$tmp" | cut -d: -f1)
+end=$(awk -v s="${start:-0}" 'NR > s && $0 == "        SCRIPT" { print NR; exit }' "$tmp")
+[ -n "$start" ] && [ -n "$end" ] || { echo "render-compose: --compact: no updater found in $compose_file" >&2; exit 1; }
+sed -n "1,$((start - 1))p" "$tmp"
+echo "        base64 -d <<'SCRIPT' | gzip -dc > /tmp/bin/craft-update || exit 1"
+sed -n "$((start + 1)),$((end - 1))p" "$tmp" | sed 's/^        //; s/\$\$/$/g' | gzip -9n | base64 | fold -w 76 | sed 's/^/        /'
+sed -n "$end,\$p" "$tmp"

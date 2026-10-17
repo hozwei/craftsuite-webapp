@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-17
+
+- **`tools/render-compose.sh --compact`** puts the updater into the YAML compressed (gzip, then
+  base64), and the container unpacks it at start, byte for byte the same script. TrueNAS SCALE
+  refuses a YAML of more than 64 KiB (the page reloads and says the session expired), and since
+  0.4.0 the updater alone is larger; with `--compact` the YAML is about 44 KB. `compose.yaml` and
+  the updater are unchanged from 0.4.0 ([truenas.md](docs/truenas.md#install)).
+
 ## [0.4.0] - 2026-10-17
 
 The apps come from the app list of nextcloud-craftsuite-layer, SoundCraft joins, and the canary

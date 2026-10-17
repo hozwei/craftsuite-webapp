@@ -3,6 +3,12 @@
 Start with `docker exec craft-update craft-update --status` and the logs of the container
 concerned ([operations.md](operations.md#status-and-logs)).
 
+## Installing
+
+| Symptom | Cause and fix |
+|---|---|
+| TrueNAS: *Save* in *Install via YAML* or *Edit* reloads the page and says the session expired; `/var/log/middlewared.log` says `payload size [...] exceeding limit of 65536` | The YAML is larger than the 64 KiB that TrueNAS takes. Render it with `--compact` ([truenas.md](truenas.md#install)). |
+
 ## Signing in
 
 | Symptom | Cause and fix |

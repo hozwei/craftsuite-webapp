@@ -10,7 +10,7 @@
 | `src/update-loop.sh` | Command of `craft-update`: installs `craft-update` into `/tmp/bin`, runs it at start and daily, retries after errors. |
 | `src/craft-update.sh` | The updater itself (`--status`, `--rollback`). |
 | `tools/build-compose.sh` | Writes `compose.yaml` from `src/`. |
-| `tools/render-compose.sh` | Fills `.env` into `compose.yaml` for single-file setups ([truenas.md](truenas.md)). |
+| `tools/render-compose.sh` | Fills `.env` into `compose.yaml` for single-file setups; `--compact` puts the updater in compressed, for the 64 KiB limit of TrueNAS ([truenas.md](truenas.md)). |
 
 ## Changing a script
 
