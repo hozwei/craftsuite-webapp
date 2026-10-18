@@ -67,7 +67,7 @@ anywhere.
 
 Requirements: Nextcloud 34 or 35, the apps on a host name of their own under the same
 registrable domain as Nextcloud (`craft.example.com` next to `cloud.example.com`), and the same
-release of nextcloud-craftsuite-layer on both sides. This page uses 0.5.1; the app list that
+release of nextcloud-craftsuite-layer on both sides. This page uses 0.5.2; the app list that
 `CRAFT_APPS=auto` takes the apps from needs 0.5.0 or later.
 
 ### On the apps' side
@@ -76,8 +76,8 @@ In `.env`:
 
 ```sh
 CRAFTSUITE_ALLOWED_ORIGINS=https://cloud.example.com
-CRAFTSUITE_LAYER_VERSION=0.5.1
-CRAFTSUITE_LAYER_SHA256=78b8ef13419204c1148a10b0eddea9df32c5170103dbe3460b3e67993547aa32
+CRAFTSUITE_LAYER_VERSION=0.5.2
+CRAFTSUITE_LAYER_SHA256=d12fc3fdf62ea2549551218dc7b5c9788308e3c641f51cbc4e4ea204cba557fe
 ```
 
 `CRAFTSUITE_ALLOWED_ORIGINS` is your Nextcloud's address exactly as the browser shows it, without
@@ -105,19 +105,19 @@ added the translator to the versions being served.
 
    ```sh
    cd "$(mktemp -d)"
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.1/craftsuite_layer-0.5.1.tar.gz
-   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.1/SHA256SUMS
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.2/craftsuite_layer-0.5.2.tar.gz
+   curl -fLO https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.2/SHA256SUMS
    sha256sum -c --ignore-missing SHA256SUMS
    ```
 
-   Expect `craftsuite_layer-0.5.1.tar.gz: OK`; its SHA-256 is
-   `535bebb58aee3cbc34a3867c7122da73c106d631b9f7f10a7ff911e7b25f2f67`.
+   Expect `craftsuite_layer-0.5.2.tar.gz: OK`; its SHA-256 is
+   `c29954fcd29406a55679fe9970ff8febba3c0f34291778bf9855fccda5357fb1`.
 2. Unpack it into Nextcloud's `custom_apps` folder (`/var/www/html/custom_apps` in the official
    image; on the host, wherever that folder is mounted), owned by the web server user (33:33 in the
    official image), and enable it:
 
    ```sh
-   tar -xzf craftsuite_layer-0.5.1.tar.gz -C /path/to/nextcloud/custom_apps
+   tar -xzf craftsuite_layer-0.5.2.tar.gz -C /path/to/nextcloud/custom_apps
    chown -R 33:33 /path/to/nextcloud/custom_apps/craftsuite_layer
    occ app:enable craftsuite_layer
    ```
@@ -158,13 +158,13 @@ pictures have PhotoCraft and LightCraft in their menu only. A Craft app made the
 (below) takes the click on all its types. FilmCraft and EffectCraft open and save their project
 files only: the media a project uses are not in the file and are missing when it is opened from
 Nextcloud. The layer's
-[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/nextcloud-app.md)
+[Nextcloud app documentation](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/nextcloud-app.md)
 lists every file type, the editor page's messages and what happens on save.
 
 What the Nextcloud app 0.3.0 to 0.5.0 added, in short; the settings and their limits are in the
 layer's documentation, under
-[Configuring](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/nextcloud-app.md#configuring)
-and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/nextcloud-app.md#files):
+[Configuring](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/nextcloud-app.md#configuring)
+and [Files](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/nextcloud-app.md#files):
 
 - **Entries only for the enabled groups.** Enabled with `-g` (step 2), the app shows its entries
   in Files only to the members of those groups; before 0.3.0, everybody saw them.
@@ -200,7 +200,7 @@ of Nextcloud, and its web server, must accept request bodies that large and larg
 [notes on uploading big files](https://docs.nextcloud.com/server/latest/admin_manual/configuration_files/big_file_upload_configuration.html)).
 Every save is a new version of the file in Nextcloud, each as large as the session. What the
 adapter does and does not handle is on the layer's
-[SoundCraft page](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/apps/soundcraft.md#known-gaps).
+[SoundCraft page](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/apps/soundcraft.md#known-gaps).
 
 ### Nextcloud's own headers
 

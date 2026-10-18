@@ -228,7 +228,7 @@ release's changelog first.
 
 To go back, set the previous version and checksum again. For the Nextcloud app, the layer's
 documentation describes the way back
-([Installing](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/nextcloud-app.md#installing)):
+([Installing](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/nextcloud-app.md#installing)):
 put the older release's folder in place and run `occ upgrade` (tested from 0.5.0 to 0.4.2 and
 back). The file types the newer version added go (`.scraftz`), and on 0.4.x an app that took its
 address from `apps_base_url` has no entries; the backup from step 3 is for the App Store apps

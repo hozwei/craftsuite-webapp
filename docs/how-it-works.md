@@ -166,7 +166,7 @@ move to another layer release; the old bundle is then removed.
 From layer 0.5.0 on, the bundle carries the app list, `apps.json`: the apps the layer release
 supports and, for each, its name, repository, short texts, colour, recommended startup timeout
 and the oldest release its adapter handles
-([the layer's hosting.md](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/hosting.md#the-app-list)).
+([the layer's hosting.md](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/hosting.md#the-app-list)).
 The updater reads format 1 and checks every value before it uses it: an app with an invalid id,
 repository or `minVersion` is left out, with an error; an invalid name, text, colour or timeout is
 not used. A list that is not JSON or has another format is an error, and no new release is taken
@@ -183,7 +183,7 @@ failing run while one is open comments on it; the next passing run comments and 
 layer 0.5.0 on, it also gives the issue a label `canary:<app>` for each app whose tests failed,
 and ends every report (the issue's text, each comment) with a line `` `canary-result {...}` ``
 that names the run, its attempt, the apps that failed and the app versions it tested
-([the layer's hosting.md](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.1/docs/hosting.md#updates),
+([the layer's hosting.md](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/hosting.md#updates),
 step 4). With the Nextcloud integration on and `CRAFTSUITE_CANARY=on`, every update run reads the
 canary's last 100 runs on `main`, its issues labelled `canary` and the reports in them, and judges
 each app on its own: a failure holds back only the apps it names.
@@ -223,10 +223,15 @@ its end).
 
 The updater follows three rules:
 
-1. **An open `canary` issue holds the apps it names**: the apps its reports name and its
-   `canary:<app>` labels. An open issue with neither (one opened before layer 0.5.0, say) holds
-   every app. This applies to every open issue, whichever layer version its runs tested, and it
-   is a wait, not an error: the run logs
+1. **An open `canary` issue holds the apps it names**: the apps its newest report names (the
+   report of the highest run, then of its highest attempt) and its `canary:<app>` labels, which
+   the workflow keeps to the apps of its latest failing run. An app that only an older report in
+   the issue names is not held by it: a later run passed it, and rules 2 and 3 judge the runs of
+   your layer version for it. So a release that an old report named comes with a layer release
+   that handles it, even while the issue stays open for another app (0.4.0 and 0.4.1 held every
+   app that any report in the issue named). An open issue with neither (one opened before layer
+   0.5.0, say) holds every app. This applies to every open issue, whichever layer version its runs
+   tested, and it is a wait, not an error: the run logs
    `layer: the canary reports a failure for <apps> (<issue>), their new releases wait while the issue is open`.
 2. **A release is taken only if the first run of your layer version after it tested it and passed
    for its app.** That run is the first run of your layer version created after the release was

@@ -132,7 +132,12 @@ of 2026-10-17 (releases, the layer's canary runs, issues and comments) saved or 
 case, against the web builds of PdfCraft 0.8.0, PhotoCraft 0.9.0, VectorCraft 0.11.0 and 0.12.0,
 DesignCraft 0.8.0, WordCraft, GridCraft, DeckCraft and CADCraft 0.7.0, LightCraft 0.8.0, FilmCraft
 0.8.0, EffectCraft 0.10.0 and SoundCraft 0.6.1 and 0.7.0, with nextcloud-craftsuite-layer 0.5.1
-(also on the way from craftsuite-webapp 0.3.0 with layer 0.4.2 and back). nginx, oauth2-proxy and
+(also on the way from craftsuite-webapp 0.3.0 with layer 0.4.2 and back). For 0.4.2, which changes
+only how an open canary issue holds apps, the same setup ran again with GitHub's answers of
+2026-10-18 and nextcloud-craftsuite-layer 0.5.2, from 0.4.1 with layer 0.5.1 and back, against the
+web builds of PdfCraft 0.9.0, PhotoCraft 0.10.0, VectorCraft 0.13.1, DesignCraft 0.9.0, WordCraft,
+GridCraft and CADCraft 0.8.0, LightCraft 0.9.1, FilmCraft 0.9.0, EffectCraft 0.11.1 and SoundCraft
+0.8.0 (DeckCraft stays at 0.7.0: the canary failed for 0.8.0). nginx, oauth2-proxy and
 their configuration are unchanged from 0.2.0, where their headers were checked. Opening and saving
 from Nextcloud is tested by the layer itself, for the Craft versions its release lists. The Craft
 apps are not pinned here: the updater follows their releases.

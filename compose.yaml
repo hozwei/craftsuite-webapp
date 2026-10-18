@@ -687,6 +687,11 @@ services:
         # re-run: at any time since its creation) and no report names an app, for every app. Only texts
         # the workflow wrote (github-actions[bot]) count: anybody may comment on a public issue.
         #
+        # An open canary issue holds the apps of its newest report (the highest run, then attempt) and of
+        # its labels canary:<app>, which the workflow keeps to the apps of its latest failing run; with
+        # neither, all apps. An app only an older report in it names is not held by the issue: a later run
+        # passed it, and rules 2 and 3 judge the runs of the pinned layer for it.
+        #
         # state/canary-since keeps one line "<layer version> <time>" per version that came into use;
         # removing the file confirms that earlier failures do not concern the layer. A failure for an app
         # is a counted run since then that failed for it. After a failure a later passing run does not
@@ -813,7 +818,8 @@ services:
             | {runs: $$counted,
                failed: ($$failed | join(" ")),
                failed_url: ($$furl // (if ($$failruns | length) > 0 then "https://github.com/\($$repo)/actions/runs/\($$failruns | last | .id)" else null end) // ""),
-               open: ([ $$open[] | . as $$i | [ ($$reports[] | select(.issue == $$i.number) | .failed[]), $$i.labels[] ]
+               open: ([ $$open[] | . as $$i | ([ $$reports[] | select(.issue == $$i.number) ] | max_by([.run, .attempt])) as $$latest
+                        | [ ($$latest.failed[]?), $$i.labels[] ]
                         | apps | if length == 0 then ["*"] else . end | .[] ] | apps | join(" ")),
                open_url: ($$open | sort_by(.created_at) | last | .html_url? // ""),
                newest: ($$finished | last | if . == null then "" else "\(.start) \(.conclusion)" + (if .rerun then ", re-run" else "" end)

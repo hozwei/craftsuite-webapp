@@ -2,6 +2,19 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-18
+
+- **An open canary issue holds only the apps it names now**: those of its newest report (the
+  highest run, then attempt) and of its `canary:<app>` labels, which the layer's workflow keeps to
+  the apps of the issue's latest failing run. 0.4.0 and 0.4.1 held every app that any report in
+  the issue had named, so an app that a later run passed stayed held until the issue was closed,
+  even while it stayed open only for another app. With nextcloud-craftsuite-layer 0.5.2 that held
+  back PhotoCraft 0.10.0, which 0.5.2 handles, as long as the issue stays open for DeckCraft 0.8.0
+  (rule 1 in [how-it-works.md](docs/how-it-works.md#the-canary)). Rules 2 and 3 are unchanged, and
+  an open issue with neither a report nor a label still holds every app.
+- **nextcloud-craftsuite-layer 0.5.2** in `.env.example` and the docs: its translators are those
+  of 0.5.1, its app list names the Craft releases of 2026-10-18 as tested.
+
 ## [0.4.1] - 2026-10-17
 
 - **`tools/render-compose.sh --compact`** puts the updater into the YAML compressed (gzip, then

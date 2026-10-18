@@ -58,7 +58,7 @@ of 12 hours costs little.
 `CRAFT_APPS` takes these words:
 
 - `auto`: the apps in the app list of the pinned layer release (`apps.json` in its hosting bundle,
-  nextcloud-craftsuite-layer 0.5.0 and later), in its order. With layer 0.5.1 these are the twelve
+  nextcloud-craftsuite-layer 0.5.0 and later), in its order. With layer 0.5.2 these are the twelve
   apps from PdfCraft to SoundCraft. An app that a later layer release adds is served once you use
   that release, without a change here.
 - `-<app>` leaves an app out: `auto -lightcraft`.
@@ -123,18 +123,18 @@ All three of the first settings are needed for the integration; see
 | Setting | Default | Meaning |
 |---|---|---|
 | `CRAFTSUITE_ALLOWED_ORIGINS` | empty | The origins of the Nextcloud servers that may frame the apps, separated by spaces: `https://host` or `https://host:port`, exactly as the browser shows them, without a path or a slash at the end. It goes into the `frame-ancestors` header and into the translator; `craft-web` refuses to start with anything else. Empty: no site may frame the apps (`frame-ancestors 'none'`). |
-| `CRAFTSUITE_LAYER_VERSION` | empty | The release of [nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer) whose translator the updater adds, such as `0.5.1`; its hosting bundle also brings the app list (0.5.0 and later). Empty: the apps are served without the translator. Use the same version as the Nextcloud app. |
+| `CRAFTSUITE_LAYER_VERSION` | empty | The release of [nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer) whose translator the updater adds, such as `0.5.2`; its hosting bundle also brings the app list (0.5.0 and later). Empty: the apps are served without the translator. Use the same version as the Nextcloud app. |
 | `CRAFTSUITE_LAYER_SHA256` | empty | The SHA-256 of that release's `craftsuite-layer-hosting-<version>.tar.gz`, from its `SHA256SUMS` file. The updater refuses a bundle with another checksum. |
 | `CRAFTSUITE_LAYER_REPO` | `hozwei/nextcloud-craftsuite-layer` | Where the bundle and the canary's runs, issues and tested translators come from (`owner/repository` on GitHub), for a fork. |
 | `CRAFTSUITE_CANARY` | `on` | `off`: take app releases without looking at the layer's canary (no waiting for a run or for open issues, no canary hold). |
 | `CRAFTSUITE_STARTUP_TIMEOUTS` | empty | How long the translator waits for an app to start, counted from the page's `load` event: entries `<app>=<milliseconds>` (1 to 2147483647), separated by spaces. An entry overrides the app list's `startupTimeout` for its app; apps with neither get the translator's default of 60 seconds. The app list recommends 180000 for LightCraft and EffectCraft, which download their `.wasm` (LightCraft also a font) while this time runs; 60 seconds are too short below about 3 Mbit/s for LightCraft (about 24 MB with gzip) and about 2.4 Mbit/s for EffectCraft (about 18 MB). FilmCraft fits into 60 seconds down to about 2 Mbit/s: add `filmcraft=180000` for users on slow connections. With a layer before 0.5.0 there is no app list: set `lightcraft=180000 effectcraft=180000` yourself. A changed value reaches the served versions on the next run. An invalid entry is an error of the run (`layer: ERROR - CRAFTSUITE_STARTUP_TIMEOUTS takes entries …`), and new releases wait. With layer 0.1.0 no timeout is passed (the value is still checked). |
 
-For nextcloud-craftsuite-layer 0.5.1 the checksum is
-`78b8ef13419204c1148a10b0eddea9df32c5170103dbe3460b3e67993547aa32`. For another release, take it
+For nextcloud-craftsuite-layer 0.5.2 the checksum is
+`d12fc3fdf62ea2549551218dc7b5c9788308e3c641f51cbc4e4ea204cba557fe`. For another release, take it
 from that release's `SHA256SUMS`:
 
 ```sh
-curl -fsSL https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.1/SHA256SUMS
+curl -fsSL https://github.com/hozwei/nextcloud-craftsuite-layer/releases/download/v0.5.2/SHA256SUMS
 ```
 
 ## Fixed settings
