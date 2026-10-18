@@ -160,8 +160,36 @@ With `CRAFTSUITE_LAYER_VERSION` set, the updater downloads
 that the bundle's SHA-256 equals both `CRAFTSUITE_LAYER_SHA256` and its line in `SHA256SUMS`,
 checks the archive's layout, and unpacks it to `layer/`. It does this again whenever the version,
 the checksum or `CRAFTSUITE_LAYER_REPO` changes. The pinned checksum in your configuration means a
-changed bundle on GitHub is refused, not used. Changing the version in `.env` is the only way to
-move to another layer release; the old bundle is then removed.
+changed bundle on GitHub is refused, not used. With a pinned version, changing it in `.env` is
+the only way to move to another layer release; the old bundle is then removed.
+
+With `CRAFTSUITE_LAYER_VERSION=auto` (from 0.5.0 on) the updater follows the layer's releases
+itself. The layer in use is the verified bundle in `layer/`. Each run (not `--status` or
+`--rollback`) reads the layer's newest releases (one API request) and moves to the highest one
+that is not a draft or a prerelease and has a hosting bundle and `SHA256SUMS`, when it is higher
+than the one in use and:
+
+- GitHub has a SHA-256 of its hosting bundle (the asset's `digest`); the download must match it
+  and its line in `SHA256SUMS`, as a pinned checksum would.
+- With the canary on, its newest finished canary run (the runs of its layer version, read from
+  `translators/core.js` at each run's commit, as for the canary below) did not fail for every app.
+  A run that failed for single apps tested the translators and found those apps' new releases at
+  fault: rules 2 and 3 below judge them. Until such a run has ended, the release waits, without an
+  error (`layer: <version> is out, it waits for a finished canary run of it; …`).
+- Its translator speaks the protocol of the layer in use (`PROTOCOL_VERSION` in `core.js`). The
+  Nextcloud app speaks it too, and within one protocol version translator and Nextcloud app of
+  different layer releases work together (the layer's
+  [protocol.md](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/protocol.md),
+  version 1 since layer 0.1.0). A release with another protocol version is an error of every run
+  until you move to it by hand, together with the Nextcloud app
+  ([operations.md](operations.md#upgrading-nextcloud-craftsuite-layer)).
+
+It never goes back to a lower release. A release that fails its download or one of its checks
+leaves the layer in use as it is, with an error. Moving works as with a changed pinned version:
+the translators in the versions being served are updated, the canary counts the new layer
+version's runs from then on, and the old bundle is removed. Without a bundle in `layer/` (a first
+installation) and without a release that qualifies, no app is installed, with an error, until one
+does.
 
 From layer 0.5.0 on, the bundle carries the app list, `apps.json`: the apps the layer release
 supports and, for each, its name, repository, short texts, colour, recommended startup timeout

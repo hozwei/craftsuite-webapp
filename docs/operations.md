@@ -164,8 +164,18 @@ app stays out; later releases are taken as usual.
 
 ## Upgrading nextcloud-craftsuite-layer
 
-Translator and Nextcloud app come from the same layer release and move together. Read the
-release's changelog first.
+Translator and Nextcloud app come from the same layer release. Within one translator protocol
+version (1 since layer 0.1.0) they work together across layer releases (the layer's
+[protocol.md](https://github.com/hozwei/nextcloud-craftsuite-layer/blob/v0.5.2/docs/protocol.md)),
+so the Nextcloud app needs an update only when its own part changes; a release that changes the
+protocol needs both at once. Read the release's changelog first.
+
+With `CRAFTSUITE_LAYER_VERSION=auto`, steps 1 and 2 happen by themselves in the daily run, under
+the conditions in [how-it-works.md](how-it-works.md#the-layer-bundle); the log says
+`layer: <version> is out (published …), it replaces <version>` and then
+`layer: <version> downloaded and verified`. A release with another protocol version stops it
+with an error: then set that version and its checksum by hand as below, and update the
+Nextcloud app with it.
 
 1. Take the checksum of the new hosting bundle from the release's `SHA256SUMS` (see
    [configuration.md](configuration.md#nextcloud-integration)) and set both values in `.env`:

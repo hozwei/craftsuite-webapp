@@ -66,9 +66,12 @@ anywhere.
 ## 2. Open files from Nextcloud
 
 Requirements: Nextcloud 34 or 35, the apps on a host name of their own under the same
-registrable domain as Nextcloud (`craft.example.com` next to `cloud.example.com`), and the same
-release of nextcloud-craftsuite-layer on both sides. This page uses 0.5.2; the app list that
-`CRAFT_APPS=auto` takes the apps from needs 0.5.0 or later.
+registrable domain as Nextcloud (`craft.example.com` next to `cloud.example.com`), and releases
+of nextcloud-craftsuite-layer on both sides that speak the same translator protocol (version 1
+since 0.1.0; the same release is simplest). This page uses 0.5.2; with
+`CRAFTSUITE_LAYER_VERSION=auto` the apps' side follows the layer's releases
+([how-it-works.md](how-it-works.md#the-layer-bundle)). The app list that `CRAFT_APPS=auto` takes
+the apps from needs 0.5.0 or later.
 
 ### On the apps' side
 

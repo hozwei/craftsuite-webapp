@@ -280,6 +280,13 @@ services:
         FAILED_URL=
         STALE=
         NEWER=
+        CANARY_FETCHED=
+        # CRAFTSUITE_LAYER_VERSION=auto: the layer follows its releases (layer_auto).
+        LAYER_AUTO=
+        LAYER_NEW=
+        INUSE_V=
+        INUSE_SHA=
+        case $$LAYER_VERSION in auto) LAYER_AUTO=1 LAYER_VERSION='' LAYER_SHA256='' ;; esac
 
         log() { echo "$$(date '+%F %T') $$*"; }
 
@@ -425,7 +432,9 @@ services:
           elif [ -n "$$AUTO" ] || [ -z "$$add" ]; then
             list=$$(installed_apps | sort)
             if [ -n "$$AUTO" ] && [ "$${1:-}" != quiet ]; then
-              if [ -z "$$LAYER_VERSION" ] && [ -n "$$list" ]; then
+              if [ -n "$$LAYER_AUTO" ] && [ -z "$$LAYER_VERSION" ]; then
+                :
+              elif [ -z "$$LAYER_VERSION" ] && [ -n "$$list" ]; then
                 log "CRAFT_APPS=auto without nextcloud-craftsuite-layer: the installed apps are kept up to date; name new apps in CRAFT_APPS"
               elif [ -z "$$LAYER_VERSION" ]; then
                 log "ERROR - CRAFT_APPS=auto takes its apps from the app list of nextcloud-craftsuite-layer, and no layer is set (CRAFTSUITE_LAYER_VERSION): name the apps in CRAFT_APPS, such as pdfcraft photocraft"
@@ -491,9 +500,10 @@ services:
           return 1
         }
 
-        # The hosting bundle of nextcloud-craftsuite-layer, pinned by version and SHA-256. Downloaded
-        # once into layer/craftsuite-layer-hosting-<version>/; sets INJ to its inject-translator.sh.
-        # Without CRAFTSUITE_LAYER_VERSION the apps are served without the Nextcloud integration.
+        # The hosting bundle of nextcloud-craftsuite-layer, pinned by version and SHA-256 (or taken by
+        # layer_auto). Downloaded once into layer/craftsuite-layer-hosting-<version>/; sets INJ to its
+        # inject-translator.sh. Without CRAFTSUITE_LAYER_VERSION the apps are served without the Nextcloud
+        # integration.
         layer_ready() {
           INJ=
           [ -n "$$LAYER_VERSION" ] || return 0
@@ -551,6 +561,17 @@ services:
               return 1
             fi
             chmod -R u+rwX,a+rX,go-w "$$t/x/$$bundle"
+            # A release that layer_auto took must speak the protocol of the layer in use: the Nextcloud app
+            # talks to the translator with it, and it changes only together with that app.
+            if [ -n "$$LAYER_NEW" ] && [ -n "$$INUSE_V" ]; then
+              pn=$$(protocol_of "$$t/x/$$bundle")
+              po=$$(protocol_of "$$LAYERS/craftsuite-layer-hosting-$$INUSE_V")
+              if [ -z "$$pn" ] || [ "$$pn" != "$$po" ]; then
+                rm -rf "$$t"
+                log "layer: ERROR - $$LAYER_VERSION speaks translator protocol $${pn:-?}, layer $$INUSE_V in use $${po:-?}: the Nextcloud app has to move with it, so set CRAFTSUITE_LAYER_VERSION=$$LAYER_VERSION and its checksum when Nextcloud has its app (operations.md, Upgrading nextcloud-craftsuite-layer)"
+                return 1
+              fi
+            fi
             rm -rf "$$dir" "$$LAYERS/.$$bundle.verified"
             if [ -e "$$dir" ] || ! mv -T "$$t/x/$$bundle" "$$dir" ||
                ! echo "$$LAYER_REPO $$LAYER_SHA256" > "$$LAYERS/.$$bundle.verified"; then
@@ -565,6 +586,89 @@ services:
             log "layer: $$LAYER_VERSION downloaded and verified"
           fi
           INJ=$$dir/hosting/inject-translator.sh
+        }
+
+        # The protocol version the translator of the bundle in folder $$1 speaks (PROTOCOL_VERSION in its
+        # core.js), or nothing.
+        protocol_of() {
+          sed -n 's/^[[:space:]]*const PROTOCOL_VERSION = \([0-9][0-9]*\);.*$$/\1/p' "$$1/translators/core.js" 2>/dev/null | head -n 1
+        }
+
+        # CRAFTSUITE_LAYER_VERSION=auto, without the network (--status, --rollback) and as the start of
+        # layer_auto: the layer in use is the verified bundle in layer/ (the highest, should there be more),
+        # INUSE_V and INUSE_SHA; they become LAYER_VERSION and LAYER_SHA256.
+        layer_in_use() {
+          INUSE_V='' INUSE_SHA=''
+          for f in "$$LAYERS"/.craftsuite-layer-hosting-*.verified; do
+            [ -f "$$f" ] || continue
+            v=$${f##*/.craftsuite-layer-hosting-}
+            v=$${v%.verified}
+            printf '%s' "$$v" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || continue
+            read -r r s < "$$f" || continue
+            [ "$$r" = "$$LAYER_REPO" ] && [ -f "$$LAYERS/craftsuite-layer-hosting-$$v/hosting/inject-translator.sh" ] || continue
+            if [ -z "$$INUSE_V" ] || below "$$INUSE_V" "$$v"; then INUSE_V=$$v INUSE_SHA=$$s; fi
+          done
+          LAYER_VERSION=$$INUSE_V LAYER_SHA256=$$INUSE_SHA
+        }
+
+        # CRAFTSUITE_LAYER_VERSION=auto: the newest release of the layer (one API request) replaces the
+        # layer in use when it is higher, GitHub has a SHA-256 of its hosting bundle (layer_ready checks
+        # the download against it and against the release's SHA256SUMS), and, with the canary on, its
+        # newest finished canary run did not fail for every app: a run that failed for single apps tested
+        # the translators and found those apps' new releases at fault (rules 2 and 3 judge them). It must
+        # also speak the protocol of the layer in use (layer_ready). Then LAYER_NEW is set, and
+        # LAYER_VERSION and LAYER_SHA256 name the release. Never goes back to a lower one. Returns 1 on an
+        # error; a release that waits for its canary run is no error.
+        layer_auto() {
+          layer_in_use
+          j=$$(gh_get "$$API/$$LAYER_REPO/releases?per_page=20") || j=
+          # shellcheck disable=SC2015,SC2016 # either fails: the error below; jq variables, not the shell's
+          [ -n "$$j" ] && cand=$$(printf '%s' "$$j" | jq -r 'def sv: split(".") | map(tonumber);
+              if type != "array" then error("not a list") else . end
+              | [ .[] | select(type == "object" and .draft == false and .prerelease == false
+                  and ((.tag_name // "") | tostring | test("\\Av[0-9]+\\.[0-9]+\\.[0-9]+\\z")))
+                | (.tag_name | ltrimstr("v")) as $$v
+                | select(any(.assets[]?; .name? == "SHA256SUMS"))
+                | ([ .assets[]? | select(.name? == "craftsuite-layer-hosting-\($$v).tar.gz") ] | first) as $$a
+                | select($$a != null)
+                | {v: $$v, published: ((.published_at // "") | tostring | fromdateiso8601? // "-"),
+                   sha: (($$a.digest // "") | tostring | if test("\\Asha256:[0-9a-f]{64}\\z") then .[7:] else "-" end)} ]
+              | max_by(.v | sv) // empty | "\(.v) \(.sha) \(.published)"') || {
+            log "layer: ERROR - cannot read the releases of $$LAYER_REPO (CRAFTSUITE_LAYER_VERSION=auto)$${INUSE_V:+, layer $$INUSE_V stays in use}"
+            return 1
+          }
+          if [ -z "$$cand" ]; then
+            [ -n "$$INUSE_V" ] && return 0
+            log "layer: ERROR - $$LAYER_REPO has no release with a hosting bundle (CRAFTSUITE_LAYER_VERSION=auto)"
+            return 1
+          fi
+          cv=$${cand%% *} cand=$${cand#* }
+          csha=$${cand%% *} cpub=$${cand#* }
+          if [ -n "$$INUSE_V" ] && ! below "$$INUSE_V" "$$cv"; then
+            return 0
+          fi
+          if [ "$$csha" = - ]; then
+            log "layer: ERROR - GitHub has no SHA-256 of the hosting bundle of layer $$cv: $${INUSE_V:-no layer} stays in use (CRAFTSUITE_LAYER_VERSION=auto)"
+            return 1
+          fi
+          if [ "$$CANARY" != off ]; then
+            # Without the canary's data, canary_check reports the error; the release waits for the next run.
+            canary_fetch || return 0
+            newest=$$(canary_judge "$$cv" "$$(date +%s)" '[]' | jq -r '.newest') || return 0
+            case $$newest in
+              '')
+                log "layer: $$cv is out, it waits for a finished canary run of it; $${INUSE_V:-no layer} stays in use (CRAFTSUITE_LAYER_VERSION=auto)"
+                return 0
+                ;;
+              *"failed for every app"*)
+                log "layer: $$cv is out, but its newest canary run failed for every app: it waits for one that does not; $${INUSE_V:-no layer} stays in use (CRAFTSUITE_LAYER_VERSION=auto)"
+                return 0
+                ;;
+            esac
+          fi
+          case $$cpub in *[!0-9]* | '') cpub='?' ;; *) cpub=$$(date -d "@$$cpub" '+%F %T') ;; esac
+          log "layer: $$cv is out (published $$cpub), it replaces $${INUSE_V:-no layer} (CRAFTSUITE_LAYER_VERSION=auto)"
+          LAYER_VERSION=$$cv LAYER_SHA256=$$csha LAYER_NEW=1
         }
 
         # The startup timeout of app $$1, as an option for inject-translator.sh in TIMEOUT (empty: the
@@ -701,19 +805,13 @@ services:
         # HORIZON (the oldest listed run when the list is full), OPEN_APPS and OPEN_URL (rule 1),
         # FAILED_APPS and FAILED_URL (rule 3), STALE. Returns 1 if a part could not be read (CANARY_PART
         # says which).
-        canary_check() {
-          since=$$(awk -v v="$$LAYER_VERSION" '$$1 == v && $$2 ~ /^[0-9]+$$/ { s = $$2 } END { print s }' "$$STATE/canary-since" 2>/dev/null)
-          if [ -z "$$since" ]; then
-            since=$$(date +%s)
-            echo "$$LAYER_VERSION $$since" >> "$$STATE/canary-since"
-            rm -f "$$STATE/canary-failed"
-            log "layer: canary failures count from now on (layer $$LAYER_VERSION)"
-          fi
-          stored=
-          if [ "$$(sed -n 2p "$$STATE/canary-failed" 2>/dev/null)" = "$$LAYER_VERSION $$since" ]; then
-            stored=$$(sed -n 3p "$$STATE/canary-failed")
-            [ -n "$$stored" ] || stored='*'
-          fi
+        # The network part of canary_check, read once per run (CRAFTSUITE_LAYER_VERSION=auto judges a newer
+        # layer release with it too): the runs (CRUNS; CHORIZON, the oldest listed run when the list is
+        # full), the layer version of each run's commit (CLAYERS), the canary issues (CISSUES) and the
+        # reports in them (CREPORTS, kept in state/canary-reports). Returns 1 if a part could not be read
+        # (CANARY_PART says which).
+        canary_fetch() {
+          [ -z "$$CANARY_FETCHED" ] || return 0
           # Each answer is reduced on the way in: the full ones are too large for jq's arguments.
           CANARY_PART=runs
           j=$$(gh_get "$$API/$$LAYER_REPO/actions/workflows/canary.yml/runs?branch=main&exclude_pull_requests=true&per_page=100") || return 1
@@ -726,9 +824,9 @@ services:
                    end: (.updated_at | fromdateiso8601), status: ((.status // "") | tostring), conclusion: ((.conclusion // "") | tostring)} ]
             else error("not a list") end') && [ -n "$$runs" ] || return 1
           page=$$(printf '%s' "$$j" | jq -r '[ .workflow_runs[] | .created_at | strings ] | "\(length) \(min // "-")"') || return 1
-          HORIZON=null
+          CHORIZON=null
           if [ "$${page%% *}" -ge 100 ]; then
-            HORIZON=$$(printf '%s' "$${page#* }" | jq -R 'fromdateiso8601? // null')
+            CHORIZON=$$(printf '%s' "$${page#* }" | jq -R 'fromdateiso8601? // null')
           fi
           CANARY_PART="translator versions"
           layers=$$(canary_layers "$$runs") && [ -n "$$layers" ] || return 1
@@ -772,11 +870,15 @@ services:
           reports=$$(printf '{"new":%s,"kept":%s,"runs":%s}' "$$reports" "$$kept" "$$runs" | jq -c '[ .runs[].id ] as $$ids
               | (.new + .kept) | unique_by([.run, .attempt, .issue]) | map(select(.run as $$r | any($$ids[]; . == $$r)))') || return 1
           printf '%s\n' "$$reports" > "$$STATE/canary-reports.new" && mv -f "$$STATE/canary-reports.new" "$$STATE/canary-reports"
-          CANARY_PART=runs
+          CRUNS=$$runs CLAYERS=$$layers CISSUES=$$issues CREPORTS=$$reports CANARY_FETCHED=1
+        }
+
+        # The verdict of the fetched canary for layer version $$1, in use since $$2 (seconds), with $$3 the
+        # apps of a failure found before (a JSON list), as one JSON object (see canary_check).
+        canary_judge() {
           # shellcheck disable=SC2016 # jq variables, not the shell's
-          stored=$$(printf '%s' "$$stored" | jq -Rsc 'split(" ") | map(select(length > 0))')
-          c=$$(printf '{"runs":%s,"layers":%s,"issues":%s,"reports":%s,"stored":%s}' "$$runs" "$$layers" "$$issues" "$$reports" "$$stored" |
-            jq -c --argjson since "$$since" --arg lv "$$LAYER_VERSION" --arg repo "$$LAYER_REPO" '
+          printf '{"runs":%s,"layers":%s,"issues":%s,"reports":%s,"stored":%s}' "$$CRUNS" "$$CLAYERS" "$$CISSUES" "$$CREPORTS" "$$3" |
+            jq -c --argjson since "$$2" --arg lv "$$1" --arg repo "$$LAYER_REPO" '
             .runs as $$runs | .layers as $$layers | .issues as $$issues | .reports as $$reports | .stored as $$stored
             | def sv: split(".") | map(tonumber);
               def xyz: type == "string" and test("\\A[0-9]+\\.[0-9]+\\.[0-9]+\\z");
@@ -826,7 +928,28 @@ services:
                  + (if .F == ["*"] then ", failed for every app" elif (.F | length) > 0 then ", failed for \(.F | join(" "))" else "" end) end),
                any: (($$judged | length) > 0),
                older: any($$judged[]; (.layer | xyz) and ($$lv | xyz) and ((.layer | sv) < ($$lv | sv))),
-               newer: (if ($$newer | length) == 0 then "" else "\($$newer | map(.layer) | max_by(sv)) \($$newer | first | .start)" end)}') || return 1
+               newer: (if ($$newer | length) == 0 then "" else "\($$newer | map(.layer) | max_by(sv)) \($$newer | first | .start)" end)}'
+        }
+
+        canary_check() {
+          since=$$(awk -v v="$$LAYER_VERSION" '$$1 == v && $$2 ~ /^[0-9]+$$/ { s = $$2 } END { print s }' "$$STATE/canary-since" 2>/dev/null)
+          if [ -z "$$since" ]; then
+            since=$$(date +%s)
+            echo "$$LAYER_VERSION $$since" >> "$$STATE/canary-since"
+            rm -f "$$STATE/canary-failed"
+            log "layer: canary failures count from now on (layer $$LAYER_VERSION)"
+          fi
+          stored=
+          if [ "$$(sed -n 2p "$$STATE/canary-failed" 2>/dev/null)" = "$$LAYER_VERSION $$since" ]; then
+            stored=$$(sed -n 3p "$$STATE/canary-failed")
+            [ -n "$$stored" ] || stored='*'
+          fi
+          canary_fetch || return 1
+          HORIZON=$$CHORIZON
+          CANARY_PART=runs
+          # shellcheck disable=SC2016 # jq variables, not the shell's
+          stored=$$(printf '%s' "$$stored" | jq -Rsc 'split(" ") | map(select(length > 0))')
+          c=$$(canary_judge "$$LAYER_VERSION" "$$since" "$$stored") || return 1
           RUNS=$$(printf '%s' "$$c" | jq -c '.runs')
           [ "$$(printf '%s' "$$c" | jq -r '.older')" != true ] || HORIZON=null
           FAILED_APPS=$$(printf '%s' "$$c" | jq -r '.failed')
@@ -1314,6 +1437,7 @@ services:
         case $${1:-} in
           "") ;;
           --status)
+            [ -z "$$LAYER_AUTO" ] || layer_in_use
             dir=$$LAYERS/craftsuite-layer-hosting-$$LAYER_VERSION
             if [ -n "$$LAYER_VERSION" ] && [ -f "$$dir/hosting/inject-translator.sh" ] &&
                [ "$$(cat "$$LAYERS/.craftsuite-layer-hosting-$$LAYER_VERSION.verified" 2>/dev/null)" = "$$LAYER_REPO $$LAYER_SHA256" ]; then
@@ -1342,10 +1466,12 @@ services:
               esac
               echo "$$a: $${v:--} (previous $$(cat "$$STATE/$$a.previous" 2>/dev/null || echo -), blocked $$(cat "$$STATE/$$a.blocked" 2>/dev/null || echo -), Nextcloud $$nc$$note)"
             done
-            if [ -z "$$LAYER_VERSION" ]; then
+            if [ -n "$$LAYER_AUTO" ] && [ -z "$$LAYER_VERSION" ]; then
+              echo "layer: auto (none in use yet)"
+            elif [ -z "$$LAYER_VERSION" ]; then
               echo "layer: off"
             elif [ -n "$$INJ" ]; then
-              echo "layer: $$LAYER_VERSION"
+              echo "layer: $$LAYER_VERSION$${LAYER_AUTO:+ (auto)}"
             else
               echo "layer: $$LAYER_VERSION (not downloaded yet)"
             fi
@@ -1384,6 +1510,7 @@ services:
         trap 'exit 1' HUP INT PIPE TERM
 
         if [ "$${1:-}" = "--rollback" ]; then
+          [ -z "$$LAYER_AUTO" ] || layer_in_use
           rollback "$$2"
           rc=$$?
           resolve_apps quiet
@@ -1394,7 +1521,21 @@ services:
         errors=0
         # state/canary-failed changes only when the canary could be read.
         FAILED=keep
-        if ! layer_ready; then
+        if [ -n "$$LAYER_AUTO" ]; then
+          layer_auto || errors=$$((errors + 1))
+          # A newer release that fails its download or its checks leaves the layer in use as it is.
+          if [ -n "$$LAYER_NEW" ] && ! layer_ready; then
+            errors=$$((errors + 1))
+            LAYER_NEW='' LAYER_VERSION=$$INUSE_V LAYER_SHA256=$$INUSE_SHA
+            [ -z "$$LAYER_VERSION" ] || log "layer: $$LAYER_VERSION stays in use"
+          fi
+        fi
+        if [ -n "$$LAYER_AUTO" ] && [ -z "$$LAYER_VERSION" ]; then
+          errors=$$((errors + 1))
+          log "layer: ERROR - no release of $$LAYER_REPO is in use yet (CRAFTSUITE_LAYER_VERSION=auto): new releases wait for one"
+          HOLD="layer not available"
+          last_manifest
+        elif ! layer_ready; then
           errors=$$((errors + 1))
           HOLD="layer not available"
           last_manifest

@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-18
+
+- **`CRAFTSUITE_LAYER_VERSION=auto`** follows the releases of nextcloud-craftsuite-layer, so that a
+  layer release no longer needs a change of the configuration. Each run (one more API request,
+  sixteen with twelve apps) moves to the layer's newest release when it is higher than the one in
+  use, GitHub has a SHA-256 of its hosting bundle (the download must match it and `SHA256SUMS`),
+  its newest finished canary run did not fail for every app (with the canary on), and its
+  translator speaks the protocol of the layer in use, which the Nextcloud app speaks too. A
+  release with another protocol version is an error until you move to it by hand. It never goes
+  back to a lower release, and a release that fails a check leaves the layer in use as it is.
+  `--status` shows `layer: <version> (auto)`. A pinned version works as before
+  ([how-it-works.md](docs/how-it-works.md#the-layer-bundle)).
+- The canary is read once per run and judged per layer version (`canary_fetch`, `canary_judge`);
+  the rules are unchanged.
+- The docs say when the Nextcloud app needs an update: within one translator protocol version it
+  works with any layer release, so only when its own part changes or the protocol does.
+
 ## [0.4.2] - 2026-10-18
 
 - **An open canary issue holds only the apps it names now**: those of its newest report (the
