@@ -90,9 +90,9 @@ That version and every lower one are skipped; the next higher release is taken a
 
 With `CRAFT_APPS=auto` (the default), the updater serves every app of the layer's app list: an
 app that a new layer release adds comes when you
-[upgrade the layer](#upgrading-nextcloud-craftsuite-layer). With a list of app ids, add the app's
-id, or `auto`, to `CRAFT_APPS` in `.env` and run `docker compose up -d`
-([configuration.md](configuration.md#the-app-list)).
+[upgrade the layer](#upgrading-nextcloud-craftsuite-layer), with `CRAFTSUITE_LAYER_VERSION=auto` by
+itself. With a list of app ids, add the app's id, or `auto`, to `CRAFT_APPS` in `.env` and run
+`docker compose up -d` ([configuration.md](configuration.md#the-app-list)).
 
 The run that follows installs, for each new app, the highest release that qualifies: old enough
 by `CRAFT_MIN_AGE_HOURS`, not below the app list's `minVersion` and, with the canary check,
@@ -285,7 +285,8 @@ being served.
 
 ## Staying informed
 
-The pinned parts change only when you change them, so follow their releases. On GitHub, *Watch* →
+The pinned parts change only when you change them (the layer follows its releases by itself with
+`CRAFTSUITE_LAYER_VERSION=auto`), so follow their releases. On GitHub, *Watch* →
 *Custom* → *Releases* (and *Security alerts*) on
 [hozwei/craftsuite-webapp](https://github.com/hozwei/craftsuite-webapp) and on
 [hozwei/nextcloud-craftsuite-layer](https://github.com/hozwei/nextcloud-craftsuite-layer); add

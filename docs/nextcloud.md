@@ -83,6 +83,9 @@ CRAFTSUITE_LAYER_VERSION=0.5.2
 CRAFTSUITE_LAYER_SHA256=d12fc3fdf62ea2549551218dc7b5c9788308e3c641f51cbc4e4ea204cba557fe
 ```
 
+Or `CRAFTSUITE_LAYER_VERSION=auto` with `CRAFTSUITE_LAYER_SHA256` empty: the updater then takes
+each new layer release by itself ([how-it-works.md](how-it-works.md#the-layer-bundle)).
+
 `CRAFTSUITE_ALLOWED_ORIGINS` is your Nextcloud's address exactly as the browser shows it, without
 a path and without a slash at the end (`https://cloud.example.com`, `https://cloud.example.com:8443`).
 Several Nextcloud servers: separate them with spaces. Then:

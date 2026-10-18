@@ -43,7 +43,10 @@ update (daily) ──▶ GitHub releases: download, verify, add translator, comp
   first run of the layer's canary for your layer version after them has tested them and passed
   for their app; a canary failure holds back the new releases of the apps it names until you
   upgrade the layer or confirm, and a canary that stopped running is reported after three days
-  (limits: [docs/how-it-works.md](docs/how-it-works.md#the-canary)).
+  (limits: [docs/how-it-works.md](docs/how-it-works.md#the-canary)). With
+  `CRAFTSUITE_LAYER_VERSION=auto` the translator follows the layer's releases by itself, each
+  checked against GitHub's checksum, its canary run and the protocol the Nextcloud app speaks
+  ([docs/how-it-works.md](docs/how-it-works.md#the-layer-bundle)).
 - **Locked-down containers**: read-only file systems, no capabilities, unprivileged users; only
   the web container is reachable from outside.
 
